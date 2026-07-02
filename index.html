@@ -11,23 +11,45 @@
   <div id="info">drone-control | Three.js Drone Simulator</div>
 
   <div id="toolbar" aria-label="Tool controls">
-    <label for="camera-mode">Camera</label>
-    <select id="camera-mode">
-      <option value="chase">Chase</option>
-      <option value="fpv">FPV</option>
-      <option value="top">Top</option>
-    </select>
-    <label for="channel-map">Channel Map</label>
-    <select id="channel-map">
-      <option value="AETR">AETR</option>
-      <option value="TAER">TAER</option>
-      <option value="CUSTOM">Custom (calibrated)</option>
-    </select>
-    <label class="toggle-label" for="god-mode">
-      <input type="checkbox" id="god-mode" />
-      God Mode
-    </label>
-    <button id="reset-button" type="button">Reset Drone</button>
+    <button id="reset-button" type="button" title="Reset Drone">R</button>
+    <button id="settings-button" type="button" class="icon-button" aria-haspopup="dialog" aria-controls="settings-modal" aria-label="Settings">⚙</button>
+  </div>
+
+  <div id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" class="modal-toggle" type="button" aria-label="Close">Close</button>
+      </div>
+      <div class="modal-body">
+        <label for="game-mode">Game Mode</label>
+        <select id="game-mode">
+          <option value="free">Free Flight</option>
+          <option value="gate">Gate Rush</option>
+        </select>
+        <label for="difficulty" id="difficulty-label" hidden>Difficulty</label>
+        <select id="difficulty" hidden>
+          <option value="normal">Normal (arterials)</option>
+          <option value="hard">Hard (alleys)</option>
+        </select>
+        <label for="camera-mode">Camera</label>
+        <select id="camera-mode">
+          <option value="chase">Chase</option>
+          <option value="fpv">FPV</option>
+          <option value="top">Top</option>
+        </select>
+        <label for="channel-map">Channel Map</label>
+        <select id="channel-map">
+          <option value="AETR">AETR</option>
+          <option value="TAER">TAER</option>
+          <option value="CUSTOM">Custom (calibrated)</option>
+        </select>
+        <label class="toggle-label" for="god-mode">
+          <input type="checkbox" id="god-mode" checked />
+          God Mode (G)
+        </label>
+      </div>
+    </div>
   </div>
 
   <canvas id="canvas"></canvas>
@@ -40,12 +62,17 @@
       <div class="stick" title="Pitch / Roll"><div class="stick-dot" id="stick-right"></div></div>
     </div>
     <div id="help-text">
-      Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset, C camera.
+      Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset, C camera, G god mode.
       RadioMaster: plug in via USB and select "USB Joystick (HID)".
     </div>
   </div>
 
   <div id="crash-banner" hidden>CRASHED</div>
+
+  <div id="gate-hud" hidden>
+    <span id="gate-arrow">▲</span>
+    <span id="gate-info">GATES 0</span>
+  </div>
 
   <div id="ready-overlay">
     <div class="ready-panel">

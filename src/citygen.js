@@ -320,6 +320,32 @@ export function sampleCityDetail(x, z) {
   };
 }
 
+/* ─── Road-network queries for gameplay ───────────────────────────── */
+
+/** Road lattice constants, re-exported for systems that walk the network. */
+export const ROADS = {
+  SPACING,
+  MAJOR_EVERY,
+  MINOR_HALF,
+  MAJOR_HALF,
+  SALT_V,
+  SALT_H,
+  RA_OUTER,
+};
+
+export { roadCenter, isMajor, roundaboutCenter };
+
+/**
+ * Whether the arterial crossing (iV, jH) hosts a roundabout. Only meaningful
+ * for arterial indices; non-arterial crossings never have one.
+ * @param {number} iV Vertical road index.
+ * @param {number} jH Horizontal road index.
+ * @returns {boolean}
+ */
+export function hasRoundabout(iV, jH) {
+  return isMajor(iV) && isMajor(jH) && hashInt(iV, jH, 101) < ROUNDABOUT_PROB;
+}
+
 /* ─── Building placement ──────────────────────────────────────────── */
 
 /** Multi-scale placement passes: large blocks first, then infill. */

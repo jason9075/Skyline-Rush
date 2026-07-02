@@ -5,6 +5,7 @@ import hdrSkyUrl from '../assets/kloofendal_48d_partly_cloudy_puresky_1k.hdr?url
 import { loadBuildingPool } from './buildings.js';
 import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
+import { GateCourse } from './gates.js';
 import { InputManager } from './input.js';
 import { World } from './world.js';
 
@@ -35,26 +36,62 @@ style.textContent = `
      HUD at 46) so settings stay adjustable on the start screen. */
   #toolbar {
     position: fixed; top: 1rem; right: 1rem;
-    display: flex; gap: 0.75rem; align-items: center;
-    padding: 0.6rem 0.8rem;
-    border: 1px solid var(--me-gray); border-radius: 2px;
-    background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(10px);
-    z-index: 47; font-size: 0.85rem;
+    display: flex; gap: 0.5rem; align-items: center;
+    padding: 0.4rem; z-index: 47; font-size: 0.85rem;
   }
-  #toolbar label { font: inherit; color: var(--me-mid); text-transform: uppercase;
-    font-size: 0.7rem; letter-spacing: 0.05em; }
-  #toolbar select, #toolbar button {
+  #toolbar button {
     font: inherit; border: 1px solid var(--me-gray); border-radius: 2px;
-    background: var(--me-panel); color: var(--me-dark);
-    padding: 0.4rem 0.7rem; cursor: pointer;
+    background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(10px);
+    color: var(--me-dark); cursor: pointer;
+    width: 2.4rem; height: 2.4rem; display: grid; place-items: center;
   }
   #toolbar button:hover { background: var(--me-red); border-color: var(--me-red); color: #fff; }
+  #toolbar .icon-button { font-size: 1.2rem; }
   .toggle-label {
     display: flex; align-items: center; gap: 0.35rem; cursor: pointer;
     color: var(--me-mid); text-transform: uppercase;
     font-size: 0.7rem; letter-spacing: 0.05em;
   }
   .toggle-label input { accent-color: var(--me-red); cursor: pointer; }
+  #settings-modal[hidden] { display: none; }
+  #settings-modal {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(27, 30, 32, 0.35); backdrop-filter: blur(4px); z-index: 48;
+  }
+  #settings-modal .modal-panel {
+    width: min(360px, calc(100vw - 2rem)); padding: 1.5rem;
+    background: var(--me-panel); border: 1px solid var(--me-gray); border-radius: 2px;
+    border-top: 4px solid var(--me-red);
+    box-shadow: 0 20px 60px rgba(27, 30, 32, 0.25);
+    display: grid; gap: 1rem;
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem;
+  }
+  .modal-header h2 {
+    font-size: 1rem; color: var(--me-dark);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .modal-toggle {
+    font: inherit; font-size: 0.8rem; cursor: pointer;
+    border: 1px solid var(--me-gray); border-radius: 2px;
+    background: var(--me-panel); color: var(--me-dark);
+    padding: 0.35rem 0.7rem;
+  }
+  .modal-toggle:hover { border-color: var(--me-red); color: var(--me-red); }
+  .modal-body { display: grid; gap: 0.4rem; }
+  .modal-body label {
+    font: inherit; color: var(--me-mid); text-transform: uppercase;
+    font-size: 0.7rem; letter-spacing: 0.05em; margin-top: 0.5rem;
+  }
+  .modal-body label:first-child { margin-top: 0; }
+  .modal-body select {
+    font: inherit; border: 1px solid var(--me-gray); border-radius: 2px;
+    background: var(--me-light); color: var(--me-dark);
+    padding: 0.5rem 0.6rem; cursor: pointer;
+  }
+  .modal-body .toggle-label { margin-top: 0.4rem; }
   /* Above the ready/calibration overlays (40/45) so the sticks stay visible
      for verifying the RC controller before starting. */
   #hud {
@@ -75,6 +112,14 @@ style.textContent = `
     border-radius: 50%; background: var(--me-red);
     transform: translate(-50%, -50%);
   }
+  #gate-hud {
+    position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 0.6rem; align-items: center; z-index: 46;
+    color: var(--me-red); font-weight: 800; font-size: 1rem;
+    letter-spacing: 0.05em; font-family: monospace;
+  }
+  #gate-hud[hidden] { display: none; }
+  #gate-arrow { display: inline-block; font-size: 1.3rem; }
   #crash-banner {
     position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%);
     color: var(--me-red); font-size: 2.4rem; font-weight: 800;
@@ -157,6 +202,15 @@ document.head.appendChild(style);
 
 /* ─── DOM refs ────────────────────────────────────────────────────── */
 const canvas = document.getElementById('canvas');
+const settingsButton = document.getElementById('settings-button');
+const settingsModal = document.getElementById('settings-modal');
+const settingsClose = document.getElementById('settings-close');
+const gameMode = document.getElementById('game-mode');
+const difficulty = document.getElementById('difficulty');
+const difficultyLabel = document.getElementById('difficulty-label');
+const gateHud = document.getElementById('gate-hud');
+const gateArrow = document.getElementById('gate-arrow');
+const gateInfo = document.getElementById('gate-info');
 const cameraMode = document.getElementById('camera-mode');
 const channelMap = document.getElementById('channel-map');
 const resetButton = document.getElementById('reset-button');
@@ -288,12 +342,40 @@ const CRASH_DURATION = 1.2;
  * @type {{position: THREE.Vector3, quaternion: THREE.Quaternion} | null}
  */
 let crashCamOrigin = null;
+/** @type {GateCourse | null} */
+let course = null;
+
+/**
+ * Create or clear the gate course to match the current game mode and flight
+ * state. Called on mode/difficulty changes and flight-state transitions, so
+ * switching settings mid-flight restarts the course from the drone's position.
+ */
+function rebuildCourse() {
+  if (course) {
+    course.dispose();
+    course = null;
+  }
+  if (gameMode.value === 'gate' && flightState === 'flying') {
+    // Drone faces local -Z; its horizontal facing follows from yaw alone.
+    const forward = new THREE.Vector3(-Math.sin(drone.yaw), 0, -Math.cos(drone.yaw));
+    course = new GateCourse(scene, difficulty.value, drone.position, forward);
+  }
+  gateHud.hidden = !course;
+}
+
+/** Difficulty only applies to Gate Rush; hide it in other modes. */
+function syncGameModeUi() {
+  const isGate = gameMode.value === 'gate';
+  difficultyLabel.hidden = !isGate;
+  difficulty.hidden = !isGate;
+}
 
 /* ─── Flight state transitions ────────────────────────────────────── */
 /** Show the crash banner, then return to the ready screen. */
 function crash() {
   flightState = 'crashed';
   crashTimer = CRASH_DURATION;
+  crashBanner.textContent = course ? `CRASHED · ${course.score} GATES` : 'CRASHED';
   crashBanner.hidden = false;
   // In FPV the airframe is hidden, so pulling the camera back from the
   // point of impact is the only way to see which part hit.
@@ -313,6 +395,7 @@ function resetDrone() {
   crashBanner.hidden = true;
   armHint.hidden = true;
   readyOverlay.hidden = false;
+  rebuildCourse();
 }
 
 /**
@@ -328,6 +411,7 @@ function startFlying() {
   armHint.hidden = true;
   readyOverlay.hidden = true;
   flightState = 'flying';
+  rebuildCourse();
 }
 
 /* ─── Camera ──────────────────────────────────────────────────────── */
@@ -393,9 +477,24 @@ window.addEventListener('resize', resize);
 resize();
 
 /* ─── Event listeners ─────────────────────────────────────────────── */
+settingsButton.addEventListener('click', () => { settingsModal.hidden = false; });
+settingsClose.addEventListener('click', () => { settingsModal.hidden = true; });
+settingsModal.addEventListener('click', (e) => {
+  if (e.target === settingsModal) settingsModal.hidden = true;
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && !settingsModal.hidden) settingsModal.hidden = true;
+});
+
 channelMap.addEventListener('change', (e) => {
   input.channelMap = e.target.value;
 });
+
+gameMode.addEventListener('change', () => {
+  syncGameModeUi();
+  rebuildCourse();
+});
+difficulty.addEventListener('change', rebuildCourse);
 
 calibrateButton.addEventListener('click', () => wizard.start());
 calibNext.addEventListener('click', () => wizard.next());
@@ -414,6 +513,7 @@ window.addEventListener('keydown', (e) => {
     const next = (modes.indexOf(cameraMode.value) + 1) % modes.length;
     cameraMode.value = modes[next];
   }
+  if (e.code === 'KeyG') godModeCheckbox.checked = !godModeCheckbox.checked;
   if (e.code === 'Space' || e.code === 'Enter') {
     e.preventDefault();
     // Drop focus so Space doesn't also re-activate a focused button on keyup.
@@ -435,6 +535,22 @@ function updateStick(dot, x, y) {
 
 /* ─── Main loop ───────────────────────────────────────────────────── */
 syncCalibrationUi();
+syncGameModeUi();
+
+const camDirTmp = new THREE.Vector3();
+
+/** Refresh the gate HUD: score, distance, and bearing arrow. */
+function updateGateHud() {
+  const target = course.target;
+  camera.getWorldDirection(camDirTmp);
+  const dx = target.x - camera.position.x;
+  const dz = target.z - camera.position.z;
+  // Signed angle from camera forward to the gate (clockwise positive),
+  // so the arrow points where the player must turn.
+  const rel = Math.atan2(camDirTmp.x * dz - camDirTmp.z * dx, camDirTmp.x * dx + camDirTmp.z * dz);
+  gateArrow.style.transform = `rotate(${((rel * 180) / Math.PI).toFixed(1)}deg)`;
+  gateInfo.textContent = `GATES ${course.score} | ${target.distanceTo(drone.position).toFixed(0)} m`;
+}
 
 let lastTime = performance.now();
 
@@ -470,6 +586,11 @@ function animate(now) {
     }
 
     if (!godMode && world.collides(drone.position, DRONE_RADIUS)) crash();
+
+    if (course && flightState === 'flying') {
+      course.update(drone.position, dt);
+      updateGateHud();
+    }
 
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
