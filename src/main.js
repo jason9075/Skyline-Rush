@@ -280,13 +280,27 @@ const wizard = new CalibrationWizard(
 /** @type {'ready' | 'flying' | 'crashed'} */
 let flightState = 'ready';
 let crashTimer = 0;
+const CRASH_DURATION = 1.2;
+/**
+ * Camera pose at the instant of an FPV crash, so the crash-cam transition
+ * can pull back from it. Null when the crash happened in a non-FPV mode,
+ * since the airframe is already visible there.
+ * @type {{position: THREE.Vector3, quaternion: THREE.Quaternion} | null}
+ */
+let crashCamOrigin = null;
 
 /* ─── Flight state transitions ────────────────────────────────────── */
 /** Show the crash banner, then return to the ready screen. */
 function crash() {
   flightState = 'crashed';
-  crashTimer = 1.2;
+  crashTimer = CRASH_DURATION;
   crashBanner.hidden = false;
+  // In FPV the airframe is hidden, so pulling the camera back from the
+  // point of impact is the only way to see which part hit.
+  crashCamOrigin =
+    cameraMode.value === 'fpv'
+      ? { position: camera.position.clone(), quaternion: camera.quaternion.clone() }
+      : null;
 }
 
 /** Respawn the drone on the pad and show the ready screen. */
@@ -295,6 +309,7 @@ function resetDrone() {
   input.reset();
   flightState = 'ready';
   crashTimer = 0;
+  crashCamOrigin = null;
   crashBanner.hidden = true;
   armHint.hidden = true;
   readyOverlay.hidden = false;
@@ -318,9 +333,34 @@ function startFlying() {
 /* ─── Camera ──────────────────────────────────────────────────────── */
 const cameraTarget = new THREE.Vector3();
 
+const CRASH_CAM_PULLBACK = new THREE.Vector3(0, 1.5, 4);
+const crashCamTargetPos = new THREE.Vector3();
+const crashCamMatrix = new THREE.Matrix4();
+const crashCamQuat = new THREE.Quaternion();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
 /** Position the camera for the selected mode. */
 function updateCamera() {
   const mode = cameraMode.value;
+
+  if (flightState === 'crashed' && crashCamOrigin) {
+    // Dolly back from the frozen FPV impact pose over the crash duration,
+    // revealing the drone (and whatever it hit) instead of a static wall
+    // of building texture filling the screen.
+    const t = 1 - Math.max(0, crashTimer) / CRASH_DURATION;
+    const ease = t * t * (3 - 2 * t);
+    drone.mesh.visible = true;
+    crashCamTargetPos
+      .copy(CRASH_CAM_PULLBACK)
+      .applyQuaternion(crashCamOrigin.quaternion)
+      .add(crashCamOrigin.position);
+    camera.position.lerpVectors(crashCamOrigin.position, crashCamTargetPos, ease);
+    crashCamMatrix.lookAt(camera.position, drone.position, WORLD_UP);
+    crashCamQuat.setFromRotationMatrix(crashCamMatrix);
+    camera.quaternion.copy(crashCamOrigin.quaternion).slerp(crashCamQuat, ease);
+    return;
+  }
+
   // Hide the airframe in FPV so the canopy doesn't block the view.
   drone.mesh.visible = mode !== 'fpv';
   if (mode === 'fpv') {
