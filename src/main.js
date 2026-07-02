@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
+import hdrSkyUrl from '../assets/kloofendal_48d_partly_cloudy_puresky_1k.hdr?url';
 import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { InputManager } from './input.js';
@@ -176,18 +178,26 @@ const calibClear = document.getElementById('calib-clear');
 /* ─── Three.js scene ──────────────────────────────────────────────── */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9CD6F2);
-scene.fog = new THREE.Fog(0x9CD6F2, 40, 140);
+scene.fog = new THREE.Fog(0xBFD9E8, 50, 180);
+
+// HDR sky: equirectangular texture used both as skybox and as IBL dome light.
+new RGBELoader().load(hdrSkyUrl, (texture) => {
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  scene.background = texture;
+  scene.environment = texture;
+});
 
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 300);
 
-const sun = new THREE.DirectionalLight(0xFFFFFF, 2.2);
+// The HDR environment supplies most ambient light; the sun adds direction.
+const sun = new THREE.DirectionalLight(0xFFFFFF, 1.8);
 sun.position.set(30, 50, 20);
 scene.add(sun);
-scene.add(new THREE.AmbientLight(0xE8F2F8, 0.9));
-scene.add(new THREE.HemisphereLight(0xDFF1FB, 0xC9D1D6, 0.6));
+scene.add(new THREE.AmbientLight(0xE8F2F8, 0.3));
 
 // Spawn resting on the ground so the drone doesn't free-fall on load.
 const SPAWN = new THREE.Vector3(0, DRONE_RADIUS, 0);
@@ -267,9 +277,12 @@ const cameraTarget = new THREE.Vector3();
 /** Position the camera for the selected mode. */
 function updateCamera() {
   const mode = cameraMode.value;
+  // Hide the airframe in FPV so the canopy doesn't block the view.
+  drone.mesh.visible = mode !== 'fpv';
   if (mode === 'fpv') {
     camera.position.copy(drone.position);
-    camera.quaternion.setFromEuler(new THREE.Euler(drone.pitch, drone.yaw + Math.PI, drone.roll, 'YXZ'));
+    // Camera and drone both face their local -Z, so the orientations match 1:1.
+    camera.quaternion.copy(drone.mesh.quaternion);
     return;
   }
   if (mode === 'top') {
@@ -312,6 +325,11 @@ resetButton.addEventListener('click', resetDrone);
 startButton.addEventListener('click', startFlying);
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetDrone();
+  if (e.code === 'KeyC') {
+    const modes = Array.from(cameraMode.options).map((o) => o.value);
+    const next = (modes.indexOf(cameraMode.value) + 1) % modes.length;
+    cameraMode.value = modes[next];
+  }
   if (e.code === 'Space' || e.code === 'Enter') {
     e.preventDefault();
     // Drop focus so Space doesn't also re-activate a focused button on keyup.
@@ -380,6 +398,7 @@ function animate(now) {
   world.update(drone.position);
 
   updateCamera();
+  world.fadeNear(camera.position);
   renderer.render(scene, camera);
 }
 requestAnimationFrame(animate);

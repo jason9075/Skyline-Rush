@@ -36,6 +36,7 @@ generated field of box obstacles, using either a real RC transmitter
 | Arrow keys | Pitch / roll |
 | `Space` / `Enter` | Start flying (arm) |
 | `R` | Reset drone |
+| `C` | Cycle camera mode (Chase → FPV → Top) |
 
 ### RadioMaster setup
 

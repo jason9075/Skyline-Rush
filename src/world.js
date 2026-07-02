@@ -16,11 +16,15 @@ const CHUNK_SIZE = 45;
 /** Obstacle grid cell size inside a chunk, meters. */
 const CELL = 9;
 /** Chunks are kept loaded within this Chebyshev radius of the drone. */
-const VIEW_RADIUS = 3;
+const VIEW_RADIUS = 4;
 /** Radius around the world origin kept free of obstacles (spawn pad). */
 const SPAWN_CLEAR_RADIUS = 8;
 /** World seed mixed into every chunk seed. */
 const WORLD_SEED = 0xD90E5;
+/** Obstacles closer than this to the camera are rendered transparent. */
+const FADE_DISTANCE = 3;
+/** Opacity used for camera-occluding obstacles. */
+const FADE_OPACITY = 0.25;
 
 /** Mirror's Edge palette: mostly white city with red/orange/blue accents. */
 const BOX_COLORS = [
@@ -60,13 +64,23 @@ export class World {
    */
   constructor(scene) {
     this.scene = scene;
-    /** @type {Map<string, {group: THREE.Group, colliders: THREE.Box3[]}>} */
+    /** @type {Map<string, {group: THREE.Group, colliders: {box: THREE.Box3, mesh: THREE.Mesh}[]}>} */
     this.chunks = new Map();
     this.boxGeo = new THREE.BoxGeometry(1, 1, 1);
     /** Shared materials: one per palette color, reused by every box. */
     this.materials = BOX_COLORS.map(
       (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 })
     );
+    /** Transparent twins of the shared materials, for camera-occluding boxes. */
+    this.fadeMaterials = this.materials.map((mat) => {
+      const clone = mat.clone();
+      clone.transparent = true;
+      clone.opacity = FADE_OPACITY;
+      clone.depthWrite = false;
+      return clone;
+    });
+    /** @type {Set<THREE.Mesh>} Boxes currently rendered transparent. */
+    this.faded = new Set();
 
     const groundSpan = CHUNK_SIZE * (VIEW_RADIUS * 2 + 1);
     this.ground = new THREE.Mesh(
@@ -119,7 +133,7 @@ export class World {
   buildChunk(cx, cz) {
     const rand = mulberry32(chunkSeed(cx, cz));
     const group = new THREE.Group();
-    /** @type {THREE.Box3[]} */
+    /** @type {{box: THREE.Box3, mesh: THREE.Mesh}[]} */
     const colliders = [];
     const originX = cx * CHUNK_SIZE;
     const originZ = cz * CHUNK_SIZE;
@@ -131,20 +145,23 @@ export class World {
         const x = originX + gx + (rand() - 0.5) * CELL * 0.5;
         const z = originZ + gz + (rand() - 0.5) * CELL * 0.5;
         const w = 1.5 + rand() * 2.5;
-        const h = 2 + rand() * 9;
+        const h = 4 + rand() * 18;
         const d = 1.5 + rand() * 2.5;
         const material = this.materials[Math.floor(rand() * this.materials.length)];
         if (Math.hypot(x, z) < SPAWN_CLEAR_RADIUS) continue;
 
-        const box = new THREE.Mesh(this.boxGeo, material);
-        box.scale.set(w, h, d);
-        box.position.set(x, h / 2, z);
-        group.add(box);
+        const mesh = new THREE.Mesh(this.boxGeo, material);
+        mesh.scale.set(w, h, d);
+        mesh.position.set(x, h / 2, z);
+        group.add(mesh);
 
-        colliders.push(new THREE.Box3(
-          new THREE.Vector3(x - w / 2, 0, z - d / 2),
-          new THREE.Vector3(x + w / 2, h, z + d / 2)
-        ));
+        colliders.push({
+          box: new THREE.Box3(
+            new THREE.Vector3(x - w / 2, 0, z - d / 2),
+            new THREE.Vector3(x + w / 2, h, z + d / 2)
+          ),
+          mesh,
+        });
       }
     }
     this.scene.add(group);
@@ -164,11 +181,46 @@ export class World {
       for (let cz = ccz - 1; cz <= ccz + 1; cz++) {
         const chunk = this.chunks.get(`${cx},${cz}`);
         if (!chunk) continue;
-        for (const box of chunk.colliders) {
+        for (const { box } of chunk.colliders) {
           if (box.distanceToPoint(center) < radius) return true;
         }
       }
     }
     return false;
+  }
+
+  /**
+   * Render obstacles near the camera as transparent so they don't block the
+   * view, restoring the shared opaque material once they move away.
+   * @param {THREE.Vector3} cameraPosition Camera world position.
+   */
+  fadeNear(cameraPosition) {
+    const ccx = Math.floor(cameraPosition.x / CHUNK_SIZE);
+    const ccz = Math.floor(cameraPosition.z / CHUNK_SIZE);
+    const nowFaded = new Set();
+
+    for (let cx = ccx - 1; cx <= ccx + 1; cx++) {
+      for (let cz = ccz - 1; cz <= ccz + 1; cz++) {
+        const chunk = this.chunks.get(`${cx},${cz}`);
+        if (!chunk) continue;
+        for (const { box, mesh } of chunk.colliders) {
+          if (box.distanceToPoint(cameraPosition) < FADE_DISTANCE) {
+            nowFaded.add(mesh);
+            if (!this.faded.has(mesh)) {
+              const index = this.materials.indexOf(mesh.material);
+              if (index !== -1) mesh.material = this.fadeMaterials[index];
+            }
+          }
+        }
+      }
+    }
+
+    for (const mesh of this.faded) {
+      if (!nowFaded.has(mesh)) {
+        const index = this.fadeMaterials.indexOf(mesh.material);
+        if (index !== -1) mesh.material = this.materials[index];
+      }
+    }
+    this.faded = nowFaded;
   }
 }
