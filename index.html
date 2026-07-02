@@ -110,10 +110,12 @@
     <div class="ready-panel">
       <h1>Drone Flight Simulator</h1>
       <p>Fly a quadcopter through the obstacle field.</p>
-      <ul>
-        <li>RadioMaster: plug in via USB, select "USB Joystick (HID)", move a stick to connect.</li>
-        <li>Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset.</li>
-      </ul>
+      <label for="input-device" class="ready-device-label">Input Device</label>
+      <select id="input-device">
+        <option value="auto">Auto (first detected)</option>
+        <option value="keyboard">Keyboard only</option>
+      </select>
+      <ul id="ready-tutorial"></ul>
       <p id="loading-text">Loading city…</p>
       <button id="start-button" type="button">Start Flying</button>
       <p class="ready-footnote">or press Space / Enter</p>

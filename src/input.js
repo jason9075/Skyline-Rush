@@ -92,8 +92,17 @@ export class InputManager {
     /** @type {Calibration | null} */
     this.calibration = InputManager.loadCalibration();
     if (this.calibration) this.channelMap = 'CUSTOM';
-    /** @type {number | null} */
-    this.gamepadIndex = null;
+    /**
+     * User-chosen gamepad index; null selects the first connected pad (auto).
+     * @type {number | null}
+     */
+    this.selectedIndex = null;
+    /** When true, ignore any gamepad and use the keyboard. */
+    this.forceKeyboard = false;
+    /** Last status string emitted, to debounce {@link onStatusChange}. */
+    this.lastStatus = null;
+    /** @type {(() => void) | null} Fired when the connected-gamepad set changes. */
+    this.onDevicesChange = null;
     /** @type {import('./touch.js').TouchControls | null} */
     this.touch = null;
     /** @type {(status: string) => void} */
@@ -105,38 +114,68 @@ export class InputManager {
     /** Expo amounts in [0, 1] applied to the centered channels. */
     this.rates = { expo: 0, yawExpo: 0 };
 
-    window.addEventListener('gamepadconnected', (e) => {
-      this.gamepadIndex = e.gamepad.index;
-      this.onStatusChange(`Gamepad: ${e.gamepad.id}`);
+    window.addEventListener('gamepadconnected', () => {
+      if (this.onDevicesChange) this.onDevicesChange();
     });
     window.addEventListener('gamepaddisconnected', (e) => {
-      if (e.gamepad.index === this.gamepadIndex) {
-        this.gamepadIndex = null;
-        this.onStatusChange('Gamepad: none (keyboard fallback active)');
-      }
+      // Drop an explicit selection that just vanished so we fall back to auto.
+      if (e.gamepad.index === this.selectedIndex) this.selectedIndex = null;
+      if (this.onDevicesChange) this.onDevicesChange();
     });
     window.addEventListener('keydown', (e) => this.keys.add(e.code));
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
   }
 
   /**
-   * Read the active gamepad, if any. Falls back to scanning
-   * `navigator.getGamepads()` when no 'gamepadconnected' event has arrived
-   * yet — some browsers only fire that event after the very first button
-   * press or stick movement on the device, so a pad plugged in before the
-   * page (or before it's been touched) would otherwise never be picked up.
+   * Resolve the active gamepad for this frame. The user's explicit selection
+   * ({@link selectedIndex}) wins while it stays connected; otherwise the first
+   * connected pad is used. `getGamepads()` must be re-polled every frame — its
+   * state objects are snapshots — and it also surfaces pads plugged in before
+   * the page, which some browsers never announce via 'gamepadconnected'.
    * @returns {Gamepad | null}
    */
   activeGamepad() {
-    if (this.gamepadIndex === null) {
-      const pad = Array.from(navigator.getGamepads()).find((p) => p);
-      if (!pad) return null;
-      this.gamepadIndex = pad.index;
-      this.onStatusChange(`Gamepad: ${pad.id}`);
-      return pad;
+    if (this.forceKeyboard) {
+      this.setStatus('Input: keyboard (selected)');
+      return null;
     }
-    // getGamepads() must be re-polled every frame; state objects are snapshots.
-    return navigator.getGamepads()[this.gamepadIndex] ?? null;
+    const pads = navigator.getGamepads();
+    const pad =
+      (this.selectedIndex !== null && pads[this.selectedIndex]) ||
+      Array.from(pads).find((p) => p) ||
+      null;
+    this.setStatus(pad ? `Gamepad: ${pad.id}` : 'Gamepad: none (keyboard fallback active)');
+    return pad;
+  }
+
+  /**
+   * Emit a status string, debounced so the per-frame poll doesn't spam it.
+   * @param {string} msg Status message.
+   */
+  setStatus(msg) {
+    if (msg === this.lastStatus) return;
+    this.lastStatus = msg;
+    this.onStatusChange(msg);
+  }
+
+  /**
+   * List currently connected gamepads (for the device selector).
+   * @returns {{index: number, id: string}[]}
+   */
+  listGamepads() {
+    return Array.from(navigator.getGamepads())
+      .filter((p) => p)
+      .map((p) => ({ index: p.index, id: p.id }));
+  }
+
+  /**
+   * Choose the active input source.
+   * @param {'auto' | 'keyboard' | number} sel `'auto'` = first connected pad,
+   *   `'keyboard'` = force keyboard, or a specific gamepad index.
+   */
+  selectInput(sel) {
+    this.forceKeyboard = sel === 'keyboard';
+    this.selectedIndex = typeof sel === 'number' ? sel : null;
   }
 
   /**

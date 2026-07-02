@@ -220,6 +220,16 @@ style.textContent = `
     text-transform: uppercase; letter-spacing: 0.08em;
   }
   .ready-panel p { color: var(--me-dark); line-height: 1.6; }
+  .ready-device-label {
+    color: var(--me-mid); text-transform: uppercase;
+    font-size: 0.7rem; letter-spacing: 0.05em;
+  }
+  .ready-panel select {
+    font: inherit; justify-self: center; width: min(320px, 100%);
+    border: 1px solid var(--me-gray); border-radius: 2px;
+    background: var(--me-light); color: var(--me-dark);
+    padding: 0.5rem 0.6rem; cursor: pointer;
+  }
   .ready-panel ul {
     list-style: none; text-align: left; display: grid; gap: 0.4rem;
     color: var(--me-mid); font-size: 0.85rem; line-height: 1.5;
@@ -309,9 +319,10 @@ style.textContent = `
     right: auto; bottom: auto; left: 1rem; top: 1rem;
     flex-direction: column; align-items: flex-start; gap: 0.5rem;
   }
-  /* No gamepad on touch → calibration is meaningless; the Space/Enter and
-     calibration-status footnotes are keyboard/RC specific. */
-  body.touch #calibrate-button, body.touch .ready-footnote { display: none; }
+  /* The Space/Enter footnote is keyboard-specific; hide it on touch. The
+     calibrate button and calibration-status footnote are toggled per input
+     source in updateTutorial(). */
+  body.touch .ready-footnote { display: none; }
 `;
 document.head.appendChild(style);
 
@@ -336,6 +347,7 @@ const osdAltValue = document.getElementById('osd-alt-value');
 const cameraMode = document.getElementById('camera-mode');
 const cameraPitch = document.getElementById('camera-pitch');
 const cameraPitchValue = document.getElementById('camera-pitch-value');
+const inputDevice = document.getElementById('input-device');
 const channelMap = document.getElementById('channel-map');
 const resetButton = document.getElementById('reset-button');
 const gamepadStatus = document.getElementById('gamepad-status');
@@ -345,6 +357,7 @@ const crashBanner = document.getElementById('crash-banner');
 const armBanner = document.getElementById('arm-banner');
 const godModeCheckbox = document.getElementById('god-mode');
 const readyOverlay = document.getElementById('ready-overlay');
+const readyTutorial = document.getElementById('ready-tutorial');
 const startButton = document.getElementById('start-button');
 const loadingText = document.getElementById('loading-text');
 const calibrateButton = document.getElementById('calibrate-button');
@@ -449,22 +462,86 @@ const input = new InputManager((status) => {
 if (isTouch) {
   document.body.classList.add('touch');
   input.setTouchControls(new TouchControls());
-  const readyList = readyOverlay.querySelector('ul');
-  if (readyList) {
-    // Replace the RC/keyboard instructions with the on-screen stick tutorial.
-    readyList.innerHTML = '';
-    const steps = [
-      'Left stick — throttle (up / down) and yaw (turn). Throttle holds when you lift your thumb.',
-      'Right stick — pitch (forward / back) and roll (bank). Springs back to center.',
-      'Tap Start Flying, then race through the gates.',
-    ];
-    for (const text of steps) {
-      const li = document.createElement('li');
-      li.textContent = text;
-      readyList.appendChild(li);
-    }
-  }
 }
+
+/* ─── Input device selector ───────────────────────────────────────── */
+/**
+ * Ready-screen tutorial text per input source. Touch always uses the on-screen
+ * pads; the others depend on the selector and whether a pad is connected.
+ * @type {Record<'touch' | 'gamepad' | 'keyboard', string[]>}
+ */
+const TUTORIALS = {
+  touch: [
+    'Left stick — throttle (up / down) and yaw (turn). Throttle holds when you lift your thumb.',
+    'Right stick — pitch (forward / back) and roll (bank). Springs back to center.',
+    'Tap Start Flying, then race through the gates.',
+  ],
+  gamepad: [
+    'RadioMaster: plug in via USB, select "USB Joystick (HID)", move a stick to connect.',
+    'Sticks map to throttle / yaw / pitch / roll per the Channel Map or your calibration.',
+    'Run Calibrate Controller once if any axis is reversed or off-center.',
+  ],
+  keyboard: [
+    'W / S throttle · A / D yaw · Arrow keys pitch / roll.',
+    'R reset · C camera · G god mode · O OSD.',
+    'Connect a gamepad and pick it above for full stick control.',
+  ],
+};
+
+/**
+ * Effective input source given the selector value and connected hardware.
+ * On touch devices the on-screen pads are always the working source.
+ * @returns {'touch' | 'gamepad' | 'keyboard'}
+ */
+function effectiveSource() {
+  const v = inputDevice.value;
+  if (v !== 'keyboard' && (v !== 'auto' || input.listGamepads().length > 0)) return 'gamepad';
+  return isTouch ? 'touch' : 'keyboard';
+}
+
+/** Rebuild the ready-screen tutorial and calibration UI for the current source. */
+function updateTutorial() {
+  const source = effectiveSource();
+  readyTutorial.innerHTML = '';
+  for (const text of TUTORIALS[source]) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    readyTutorial.appendChild(li);
+  }
+  // Calibration only applies to a physical gamepad.
+  calibrateButton.hidden = source !== 'gamepad';
+  calibrationStatus.hidden = source !== 'gamepad';
+}
+
+/** Push the selected device value into the input manager and refresh the UI. */
+function syncInputDevice() {
+  const v = inputDevice.value;
+  input.selectInput(v === 'auto' || v === 'keyboard' ? v : Number(v));
+  updateTutorial();
+}
+
+/**
+ * Rebuild the device dropdown from the connected gamepads, preserving the
+ * current choice when it's still available (otherwise falling back to Auto).
+ * The two static options (Auto / Keyboard) are kept; only the dynamic
+ * per-gamepad entries are refreshed.
+ */
+function populateInputDevices() {
+  const prev = inputDevice.value;
+  inputDevice.querySelectorAll('option[data-pad]').forEach((o) => o.remove());
+  for (const { index, id } of input.listGamepads()) {
+    const opt = document.createElement('option');
+    opt.value = String(index);
+    opt.dataset.pad = '1';
+    opt.textContent = `${index}: ${id}`;
+    inputDevice.appendChild(opt);
+  }
+  inputDevice.value = Array.from(inputDevice.options).some((o) => o.value === prev) ? prev : 'auto';
+  syncInputDevice();
+}
+
+input.onDevicesChange = populateInputDevices;
+inputDevice.addEventListener('change', syncInputDevice);
 
 /* ─── Calibration wizard ──────────────────────────────────────────── */
 /** Sync the channel-map select and ready-screen status with input state. */
@@ -769,6 +846,7 @@ function saveSettings() {
     difficulty: difficulty.value,
     cameraMode: cameraMode.value,
     cameraPitch: cameraPitch.value,
+    inputDevice: inputDevice.value,
     channelMap: channelMap.value,
     godMode: godModeCheckbox.checked,
     osd: osdCheckbox.checked,
@@ -808,6 +886,10 @@ function loadSettings() {
   if (s.cameraPitch !== undefined && Number.isFinite(Number(s.cameraPitch))) {
     cameraPitch.value = String(s.cameraPitch);
   }
+  // Only 'auto'/'keyboard' are stable across sessions; a saved gamepad index
+  // has no matching option yet at load, so setSelect harmlessly ignores it
+  // and populateInputDevices() re-applies it if the pad is still present.
+  if (typeof s.inputDevice === 'string') setSelect(inputDevice, s.inputDevice);
   // Only restore CUSTOM if a calibration actually exists this session.
   if (typeof s.channelMap === 'string' && (s.channelMap !== 'CUSTOM' || input.calibration)) {
     setSelect(channelMap, s.channelMap);
@@ -913,6 +995,7 @@ function updateStick(dot, x, y) {
 
 /* ─── Main loop ───────────────────────────────────────────────────── */
 loadSettings();
+populateInputDevices();
 syncCalibrationUi();
 syncGameModeUi();
 syncCameraPitch();
