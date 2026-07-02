@@ -67,6 +67,7 @@ function buildDroneMesh() {
     rotor.name = `rotor-${i}`;
     group.add(rotor);
   }
+  group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   return group;
 }
 

@@ -184,6 +184,8 @@ const calibClear = document.getElementById('calib-clear');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9CD6F2);
@@ -198,11 +200,35 @@ new RGBELoader().load(hdrSkyUrl, (texture) => {
 
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 500);
 
-// The HDR environment supplies most ambient light; the sun adds direction.
+// The HDR environment supplies most ambient light; the sun adds direction
+// and casts shadows. Fixed offset from the drone, kept constant each frame
+// (see updateSun below) so the shadow frustum travels with the world.
+const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
 const sun = new THREE.DirectionalLight(0xFFFFFF, 1.8);
-sun.position.set(30, 50, 20);
-scene.add(sun);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+const SHADOW_HALF = 110;
+sun.shadow.camera.left = -SHADOW_HALF;
+sun.shadow.camera.right = SHADOW_HALF;
+sun.shadow.camera.top = SHADOW_HALF;
+sun.shadow.camera.bottom = -SHADOW_HALF;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 220;
+sun.shadow.bias = -0.0015;
+sun.shadow.normalBias = 0.05;
+scene.add(sun, sun.target);
 scene.add(new THREE.AmbientLight(0xE8F2F8, 0.3));
+
+/**
+ * Keep the sun (and its shadow frustum) centered on a moving target, since
+ * the shadow camera can't cover the infinite world at usable resolution.
+ * @param {THREE.Vector3} target World point to center the shadow frustum on.
+ */
+function updateSun(target) {
+  sun.position.copy(target).add(SUN_OFFSET);
+  sun.target.position.copy(target);
+  sun.target.updateMatrixWorld();
+}
 
 // Spawn resting on the ground so the drone doesn't free-fall on load.
 const SPAWN = new THREE.Vector3(0, DRONE_RADIUS, 0);
@@ -417,6 +443,7 @@ function animate(now) {
 
   updateCamera();
   world.fadeNear(camera.position, cameraMode.value !== 'fpv');
+  updateSun(drone.position);
   renderer.render(scene, camera);
 }
 requestAnimationFrame(animate);

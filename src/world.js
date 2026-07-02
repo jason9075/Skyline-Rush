@@ -31,11 +31,11 @@ const GROUND_RES_HI = 512;
 /** Mirror's Edge palette: a mostly white city with sparse accents. */
 const BOX_COLORS = [
   0xF5F7F8, 0xF5F7F8, 0xF5F7F8, 0xFFFFFF, 0xE8ECEE, 0xDDE3E6,
-  0xE0301E, 0xF39C12, 0x4FA3D9,
+  0xFF6A00, 0xF39C12, 0x4FA3D9,
 ];
 
 /** Ground/road tile colors (RGB triplets). */
-const COL_GROUND = [232, 236, 238];
+const COL_GROUND = [187, 196, 211];
 const COL_PLAZA = [214, 218, 222];
 const COL_MAJOR = [64, 68, 74];
 const COL_MINOR = [88, 92, 98];
@@ -200,6 +200,8 @@ export class World {
       const mesh = new THREE.Mesh(template.geometry, material);
       mesh.rotation.y = p.quarter * (Math.PI / 2);
       mesh.position.set(p.x, 0, p.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       group.add(mesh);
 
       colliders.push({
@@ -267,6 +269,7 @@ export class World {
     );
     tile.rotation.x = -Math.PI / 2;
     tile.position.set(originX + CHUNK_SIZE / 2, 0, originZ + CHUNK_SIZE / 2);
+    tile.receiveShadow = true;
     return { tile, texture };
   }
 
@@ -314,7 +317,10 @@ export class World {
   fadeNear(cameraPosition, active = true) {
     const nowFaded = new Set();
     if (!active) {
-      for (const mesh of this.faded) mesh.material = mesh.userData.origMat;
+      for (const mesh of this.faded) {
+        mesh.material = mesh.userData.origMat;
+        mesh.castShadow = true;
+      }
       this.faded = nowFaded;
       return;
     }
@@ -332,6 +338,8 @@ export class World {
             if (!this.faded.has(mesh)) {
               mesh.userData.origMat = mesh.material;
               mesh.material = this.fadeMaterial;
+              // A translucent building casting a solid shadow looks wrong.
+              mesh.castShadow = false;
             }
           }
         }
@@ -339,7 +347,10 @@ export class World {
     }
 
     for (const mesh of this.faded) {
-      if (!nowFaded.has(mesh)) mesh.material = mesh.userData.origMat;
+      if (!nowFaded.has(mesh)) {
+        mesh.material = mesh.userData.origMat;
+        mesh.castShadow = true;
+      }
     }
     this.faded = nowFaded;
   }

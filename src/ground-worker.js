@@ -10,7 +10,7 @@
 import { sampleCityDetail } from './citygen.js';
 
 /** Base colors (sRGB). */
-const COL_GROUND = [232, 236, 238];
+const COL_GROUND = [187, 196, 211];
 const COL_SIDEWALK = [219, 223, 227];
 const COL_PLAZA = [214, 218, 222];
 const COL_MAJOR = [64, 68, 74];
