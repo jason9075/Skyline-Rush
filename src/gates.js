@@ -45,6 +45,13 @@ const RA_AVOID = ROADS.RA_OUTER + 12;
 const BEACON_HEIGHT = 70;
 /** Spacing of suggested-path samples along the road, meters. */
 const PATH_SAMPLE = 6;
+/** Parallel wind-streak strands per guide line (a diffuse bundle, not one line). */
+const PATH_STRANDS = 6;
+/** Lateral / vertical spread of the outer strands from the centerline, meters. */
+const PATH_SPREAD = 1.7;
+const PATH_SPREAD_Y = 1.1;
+/** Streak wavelength (meters); also the range of the per-strand phase jitter. */
+const STREAK_WAVELENGTH = 34;
 const GATE_COLOR = 0xE0301E;
 
 /**
@@ -299,6 +306,23 @@ function makeWindMaterial(opacity) {
   });
 }
 
+/**
+ * Per-point horizontal perpendiculars along a polyline, used to fan the guide
+ * strands out sideways from the road centerline.
+ * @param {THREE.Vector3[]} pts Polyline points.
+ * @returns {THREE.Vector3[]} Unit perpendicular (in the XZ plane) per point.
+ */
+function computePerps(pts) {
+  return pts.map((_, i) => {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(pts.length - 1, i + 1)];
+    const tx = b.x - a.x;
+    const tz = b.z - a.z;
+    const len = Math.hypot(tx, tz) || 1;
+    return new THREE.Vector3(-tz / len, 0, tx / len);
+  });
+}
+
 const TMP_A = new THREE.Vector3();
 const TMP_B = new THREE.Vector3();
 
@@ -363,7 +387,7 @@ export class GateCourse {
         };
     /** The tail end of the previous guide line; the next one starts there. */
     this.prevAnchor = startPos.clone();
-    /** @type {{pos: THREE.Vector3, normal: THREE.Vector3, mesh: THREE.Mesh, line: THREE.Line | null}[]} */
+    /** @type {{pos: THREE.Vector3, normal: THREE.Vector3, mesh: THREE.Mesh, lines: THREE.Line[]}[]} */
     this.gates = [this.spawnGate(true), this.spawnGate()];
     this.promote();
   }
@@ -384,23 +408,57 @@ export class GateCourse {
     mesh.lookAt(TMP_A.copy(pos).add(normal));
     this.scene.add(mesh);
 
-    let line = null;
+    let lines = [];
     if (!first) {
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([this.prevAnchor.clone(), ...path]);
-      line = new THREE.Line(lineGeo, this.pathGhostMat);
-      line.computeLineDistances();
-      this.scene.add(line);
+      lines = this.buildGuideLines([this.prevAnchor.clone(), ...path]);
+      for (const l of lines) this.scene.add(l);
     }
     this.prevAnchor.copy(pos);
 
-    return { pos, normal, mesh, line };
+    return { pos, normal, mesh, lines };
+  }
+
+  /**
+   * Build the fanned wind-streak strands for one guide line: several parallel
+   * offset polylines spread sideways and vertically from the road centerline,
+   * each with a randomized streak phase so they read as a diffuse bundle that
+   * clearly telegraphs turns — rather than a single line down the middle.
+   * @param {THREE.Vector3[]} center Centerline polyline (prev gate → next gate).
+   * @returns {THREE.Line[]}
+   */
+  buildGuideLines(center) {
+    const perps = computePerps(center);
+    const lines = [];
+    for (let s = 0; s < PATH_STRANDS; s++) {
+      // Even fan across [-spread, spread] plus jitter, so the strands never
+      // collapse onto the centerline (and thus the gate center).
+      const base = PATH_STRANDS === 1 ? 0 : (s / (PATH_STRANDS - 1)) * 2 - 1;
+      const lat = base * PATH_SPREAD + (this.rand() * 2 - 1) * 0.3;
+      const vy = (this.rand() * 2 - 1) * PATH_SPREAD_Y;
+      const phase = this.rand() * STREAK_WAVELENGTH;
+
+      const pts = center.map(
+        (p, i) => new THREE.Vector3(p.x + perps[i].x * lat, p.y + vy, p.z + perps[i].z * lat)
+      );
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      // Cumulative arc length + per-strand phase feeds the streak shader's
+      // `lineDistance` attribute directly (replaces computeLineDistances).
+      const dist = new Float32Array(pts.length);
+      dist[0] = phase;
+      for (let i = 1; i < pts.length; i++) {
+        dist[i] = dist[i - 1] + pts[i].distanceTo(pts[i - 1]);
+      }
+      geo.setAttribute('lineDistance', new THREE.Float32BufferAttribute(dist, 1));
+      lines.push(new THREE.Line(geo, this.pathGhostMat));
+    }
+    return lines;
   }
 
   /** Highlight the active gate and its guide line; park the beacon above it. */
   promote() {
     const g = this.gates[0];
     g.mesh.material = this.solidMat;
-    if (g.line) g.line.material = this.pathSolidMat;
+    for (const l of g.lines) l.material = this.pathSolidMat;
     // The beacon rests on the frame's top edge so it never pokes into the
     // aperture the player is aiming for.
     this.beacon.position.set(g.pos.x, g.pos.y + GATE_HALF + BAR + BEACON_HEIGHT / 2, g.pos.z);
@@ -441,9 +499,9 @@ export class GateCourse {
         event = 'pass';
         this.score += 1;
         this.scene.remove(g.mesh);
-        if (g.line) {
-          this.scene.remove(g.line);
-          g.line.geometry.dispose();
+        for (const l of g.lines) {
+          this.scene.remove(l);
+          l.geometry.dispose();
         }
         this.gates.shift();
         this.gates.push(this.spawnGate());
@@ -460,9 +518,9 @@ export class GateCourse {
   dispose() {
     for (const g of this.gates) {
       this.scene.remove(g.mesh);
-      if (g.line) {
-        this.scene.remove(g.line);
-        g.line.geometry.dispose();
+      for (const l of g.lines) {
+        this.scene.remove(l);
+        l.geometry.dispose();
       }
     }
     this.scene.remove(this.beacon);
