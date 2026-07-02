@@ -620,7 +620,7 @@ function animate(now) {
 
     // Ground contact: gentle touch lands, hard impact crashes (unless god mode).
     if (drone.position.y < DRONE_RADIUS) {
-      if (drone.velocity.y < -4 && !godMode) {
+      if (drone.velocity.y < -6 && !godMode) {
         crash();
       } else {
         drone.position.y = DRONE_RADIUS;
