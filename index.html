@@ -55,6 +55,10 @@
           <input type="checkbox" id="god-mode" checked />
           God Mode (G)
         </label>
+        <label class="toggle-label" for="osd-toggle">
+          <input type="checkbox" id="osd-toggle" />
+          OSD (O)
+        </label>
       </div>
     </div>
   </div>
@@ -63,18 +67,36 @@
 
   <div id="hud">
     <div id="gamepad-status">Gamepad: none (keyboard fallback active)</div>
-    <div id="telemetry">ALT 0.0 m | SPD 0.0 m/s</div>
     <div id="sticks">
       <div class="stick" title="Throttle / Yaw"><div class="stick-dot" id="stick-left"></div></div>
       <div class="stick" title="Pitch / Roll"><div class="stick-dot" id="stick-right"></div></div>
     </div>
     <div id="help-text">
-      Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset, C camera, G god mode.
+      Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset, C camera, G god mode, O OSD.
       RadioMaster: plug in via USB and select "USB Joystick (HID)".
     </div>
   </div>
 
   <div id="crash-banner" hidden>CRASHED</div>
+
+  <div id="arm-banner" hidden>Lower the throttle stick to arm</div>
+
+  <div id="osd" hidden>
+    <div id="osd-horizon"></div>
+    <div id="osd-crosshair"></div>
+    <div id="osd-info">
+      <div class="osd-readout" id="osd-speed">
+        <span class="osd-label">SPD</span>
+        <span class="osd-value" id="osd-speed-value">0.0</span>
+        <span class="osd-unit">m/s</span>
+      </div>
+      <div class="osd-readout" id="osd-alt">
+        <span class="osd-label">ALT</span>
+        <span class="osd-value" id="osd-alt-value">0.0</span>
+        <span class="osd-unit">m</span>
+      </div>
+    </div>
+  </div>
 
   <div id="pass-flash"></div>
 

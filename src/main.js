@@ -101,7 +101,6 @@ style.textContent = `
     display: grid; gap: 0.5rem; font-size: 0.8rem;
   }
   #gamepad-status { color: var(--me-red); font-weight: 700; }
-  #telemetry { color: var(--me-dark); font-family: monospace; }
   #help-text { color: var(--me-mid); max-width: 34rem; line-height: 1.5; }
   #sticks { display: flex; gap: 0.75rem; }
   .stick {
@@ -122,6 +121,53 @@ style.textContent = `
   }
   #gate-hud[hidden] { display: none; }
   #gate-arrow { display: inline-block; font-size: 1.3rem; }
+  /* FPV-goggle style OSD: white monospace glyphs with a soft dark halo so
+     they read over both the bright sky and white facades. Sits below the
+     gate flash (28) and above the scene; never intercepts the pointer. */
+  #osd {
+    position: fixed; inset: 0; pointer-events: none; z-index: 27;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    color: rgba(255, 255, 255, 0.92);
+    text-shadow: 0 0 4px rgba(27, 30, 32, 0.6), 0 1px 2px rgba(27, 30, 32, 0.7);
+  }
+  #osd[hidden] { display: none; }
+  /* Artificial horizon: a short line with a clear center gap, rotated by
+     roll and shifted by pitch from JS. Stacked drop-shadows give it a dark
+     halo so it stays visible against the white ground and facades. */
+  #osd-horizon {
+    position: absolute; left: 50%; top: 50%;
+    width: 16vw; height: 2px; will-change: transform;
+    background: linear-gradient(to right,
+      currentColor 0 35%, transparent 35% 65%, currentColor 65% 100%);
+    opacity: 0.9;
+    filter: drop-shadow(0 0 2px rgba(27, 30, 32, 0.95))
+            drop-shadow(0 1px 3px rgba(27, 30, 32, 0.7));
+  }
+  /* Fixed screen-center crosshair (does not rotate with roll): the aircraft
+     reference point the horizon line is read against. */
+  #osd-crosshair {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 16px; height: 16px;
+    filter: drop-shadow(0 0 2px rgba(27, 30, 32, 0.95))
+            drop-shadow(0 1px 3px rgba(27, 30, 32, 0.7));
+  }
+  #osd-crosshair::before, #osd-crosshair::after {
+    content: ''; position: absolute; background: currentColor;
+  }
+  #osd-crosshair::before {
+    left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%);
+  }
+  #osd-crosshair::after {
+    top: 50%; left: 0; width: 100%; height: 2px; transform: translateY(-50%);
+  }
+  #osd-info {
+    position: absolute; right: 1.2rem; bottom: 1rem;
+    display: flex; gap: 1.4rem;
+  }
+  .osd-readout { display: grid; justify-items: center; gap: 0.1rem; }
+  .osd-label { font-size: 0.65rem; letter-spacing: 0.25em; opacity: 0.7; }
+  .osd-value { font-size: 1.5rem; font-weight: 700; }
+  .osd-unit { font-size: 0.65rem; opacity: 0.7; }
   /* Edge vignette pulse on gate events: the screen center stays clear so it
      never blocks the FPV view. White = pass, red = miss. */
   #pass-flash {
@@ -146,6 +192,16 @@ style.textContent = `
     letter-spacing: 0.12em; text-transform: uppercase; z-index: 30;
   }
   #crash-banner[hidden] { display: none; }
+  /* Reminder shown while auto-rearming after a crash: the drone won't take
+     off until the throttle stick is confirmed down, but no Start click is
+     required once it is. */
+  #arm-banner {
+    position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%);
+    color: var(--me-orange); font-size: 1.3rem; font-weight: 800;
+    letter-spacing: 0.06em; text-transform: uppercase; text-align: center;
+    z-index: 30;
+  }
+  #arm-banner[hidden] { display: none; }
   #ready-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 40;
@@ -233,16 +289,21 @@ const gateHud = document.getElementById('gate-hud');
 const gateArrow = document.getElementById('gate-arrow');
 const gateInfo = document.getElementById('gate-info');
 const passFlash = document.getElementById('pass-flash');
+const osd = document.getElementById('osd');
+const osdCheckbox = document.getElementById('osd-toggle');
+const osdHorizon = document.getElementById('osd-horizon');
+const osdSpeedValue = document.getElementById('osd-speed-value');
+const osdAltValue = document.getElementById('osd-alt-value');
 const cameraMode = document.getElementById('camera-mode');
 const cameraPitch = document.getElementById('camera-pitch');
 const cameraPitchValue = document.getElementById('camera-pitch-value');
 const channelMap = document.getElementById('channel-map');
 const resetButton = document.getElementById('reset-button');
 const gamepadStatus = document.getElementById('gamepad-status');
-const telemetry = document.getElementById('telemetry');
 const stickLeft = document.getElementById('stick-left');
 const stickRight = document.getElementById('stick-right');
 const crashBanner = document.getElementById('crash-banner');
+const armBanner = document.getElementById('arm-banner');
 const godModeCheckbox = document.getElementById('god-mode');
 const readyOverlay = document.getElementById('ready-overlay');
 const startButton = document.getElementById('start-button');
@@ -359,6 +420,8 @@ const wizard = new CalibrationWizard(
 let flightState = 'ready';
 let crashTimer = 0;
 const CRASH_DURATION = 1.2;
+/** True while waiting to auto-rearm after a crash, without a manual Start press. */
+let pendingAutoStart = false;
 /**
  * Camera pose at the instant of an FPV crash, so the crash-cam transition
  * can pull back from it. Null when the crash happened in a non-FPV mode,
@@ -394,11 +457,36 @@ function syncGameModeUi() {
   difficulty.hidden = !isGate;
 }
 
+/* ─── OSD ─────────────────────────────────────────────────────────── */
+/** OSD is an in-flight instrument: visible only when enabled AND flying. */
+function syncOsdVisibility() {
+  osd.hidden = !osdCheckbox.checked || flightState !== 'flying';
+}
+
+/** Refresh the OSD horizon and readouts from the drone state, once per frame. */
+function updateOsd() {
+  // Artificial horizon: rotate with roll, shift along the rolled vertical
+  // with pitch (screen px per degree derived from the vertical FOV).
+  const pxPerDeg = window.innerHeight / camera.fov;
+  const rollDeg = THREE.MathUtils.radToDeg(drone.roll);
+  const maxShift = window.innerHeight * 0.32;
+  const pitchPx = Math.max(
+    -maxShift,
+    Math.min(maxShift, THREE.MathUtils.radToDeg(drone.pitch) * pxPerDeg)
+  );
+  osdHorizon.style.transform =
+    `translate(-50%, -50%) rotate(${rollDeg.toFixed(1)}deg) translateY(${pitchPx.toFixed(1)}px)`;
+
+  osdSpeedValue.textContent = drone.speed().toFixed(1);
+  osdAltValue.textContent = drone.position.y.toFixed(1);
+}
+
 /* ─── Flight state transitions ────────────────────────────────────── */
 /** Show the crash banner, then return to the ready screen. */
 function crash() {
   flightState = 'crashed';
   crashTimer = CRASH_DURATION;
+  syncOsdVisibility();
   crashBanner.textContent = course ? `CRASHED · ${course.score} GATES` : 'CRASHED';
   crashBanner.hidden = false;
   // In FPV the airframe is hidden, so pulling the camera back from the
@@ -409,8 +497,13 @@ function crash() {
       : null;
 }
 
-/** Respawn the drone on the pad and show the ready screen. */
-function resetDrone() {
+/**
+ * Respawn the drone on the pad.
+ * @param {boolean} autoStart After a crash, skip the manual Start screen and
+ *   rearm as soon as the throttle stick is confirmed down (see
+ *   {@link attemptAutoArm}), instead of waiting for Space/Enter/click.
+ */
+function resetDrone(autoStart = false) {
   drone.reset();
   input.reset();
   flightState = 'ready';
@@ -418,8 +511,11 @@ function resetDrone() {
   crashCamOrigin = null;
   crashBanner.hidden = true;
   armHint.hidden = true;
-  readyOverlay.hidden = false;
+  armBanner.hidden = true;
+  pendingAutoStart = autoStart;
+  readyOverlay.hidden = autoStart;
   rebuildCourse();
+  syncOsdVisibility();
 }
 
 /**
@@ -432,10 +528,31 @@ function startFlying() {
     armHint.hidden = false;
     return;
   }
+  pendingAutoStart = false;
   armHint.hidden = true;
+  armBanner.hidden = true;
   readyOverlay.hidden = true;
   flightState = 'flying';
   rebuildCourse();
+  syncOsdVisibility();
+}
+
+/**
+ * Silently retry arming every frame while {@link pendingAutoStart} is set
+ * (post-crash rearm): no Start screen, just the same throttle-down safety
+ * check as {@link startFlying}, surfaced as a standalone reminder banner.
+ */
+function attemptAutoArm() {
+  if (!pendingAutoStart || flightState !== 'ready' || wizard.active || !world.ready) return;
+  if (input.activeGamepad() && input.poll(0).throttle > 0.1) {
+    armBanner.hidden = false;
+    return;
+  }
+  pendingAutoStart = false;
+  armBanner.hidden = true;
+  flightState = 'flying';
+  rebuildCourse();
+  syncOsdVisibility();
 }
 
 /* ─── Camera ──────────────────────────────────────────────────────── */
@@ -515,7 +632,69 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+/* ─── Settings persistence ────────────────────────────────────────── */
+const SETTINGS_KEY = 'drone-control.settings';
+
+/** Snapshot every settings control into localStorage. */
+function saveSettings() {
+  const settings = {
+    flightMode: flightMode.value,
+    gameMode: gameMode.value,
+    difficulty: difficulty.value,
+    cameraMode: cameraMode.value,
+    cameraPitch: cameraPitch.value,
+    channelMap: channelMap.value,
+    godMode: godModeCheckbox.checked,
+    osd: osdCheckbox.checked,
+  };
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.warn('Failed to persist settings:', err);
+  }
+}
+
+/** Set a select's value only if that option actually exists. */
+function setSelect(select, value) {
+  if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
+}
+
+/**
+ * Restore saved settings into the controls and push them into the systems
+ * that consume them (drone, input, camera). Dependent UI is synced by the
+ * caller via the usual sync* helpers.
+ */
+function loadSettings() {
+  let s = null;
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) s = JSON.parse(raw);
+  } catch (err) {
+    console.warn('Failed to load settings:', err);
+  }
+  if (!s) return;
+  if (typeof s.flightMode === 'string') setSelect(flightMode, s.flightMode);
+  if (typeof s.gameMode === 'string') setSelect(gameMode, s.gameMode);
+  if (typeof s.difficulty === 'string') setSelect(difficulty, s.difficulty);
+  if (typeof s.cameraMode === 'string') setSelect(cameraMode, s.cameraMode);
+  if (s.cameraPitch !== undefined && Number.isFinite(Number(s.cameraPitch))) {
+    cameraPitch.value = String(s.cameraPitch);
+  }
+  // Only restore CUSTOM if a calibration actually exists this session.
+  if (typeof s.channelMap === 'string' && (s.channelMap !== 'CUSTOM' || input.calibration)) {
+    setSelect(channelMap, s.channelMap);
+  }
+  if (typeof s.godMode === 'boolean') godModeCheckbox.checked = s.godMode;
+  if (typeof s.osd === 'boolean') osdCheckbox.checked = s.osd;
+
+  drone.flightMode = flightMode.value;
+  input.channelMap = channelMap.value;
+}
+
 /* ─── Event listeners ─────────────────────────────────────────────── */
+// Every settings control lives inside the modal, so one bubbled 'change'
+// listener persists them all.
+settingsModal.addEventListener('change', saveSettings);
 settingsButton.addEventListener('click', () => { settingsModal.hidden = false; });
 settingsClose.addEventListener('click', () => { settingsModal.hidden = true; });
 settingsModal.addEventListener('click', (e) => {
@@ -533,6 +712,8 @@ flightMode.addEventListener('change', (e) => {
   drone.flightMode = e.target.value;
 });
 
+osdCheckbox.addEventListener('change', syncOsdVisibility);
+
 gameMode.addEventListener('change', () => {
   syncGameModeUi();
   rebuildCourse();
@@ -547,7 +728,7 @@ calibClear.addEventListener('click', () => {
   wizard.cancel();
 });
 
-resetButton.addEventListener('click', resetDrone);
+resetButton.addEventListener('click', () => resetDrone());
 startButton.addEventListener('click', startFlying);
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetDrone();
@@ -555,8 +736,17 @@ window.addEventListener('keydown', (e) => {
     const modes = Array.from(cameraMode.options).map((o) => o.value);
     const next = (modes.indexOf(cameraMode.value) + 1) % modes.length;
     cameraMode.value = modes[next];
+    saveSettings();
   }
-  if (e.code === 'KeyG') godModeCheckbox.checked = !godModeCheckbox.checked;
+  if (e.code === 'KeyG') {
+    godModeCheckbox.checked = !godModeCheckbox.checked;
+    saveSettings();
+  }
+  if (e.code === 'KeyO') {
+    osdCheckbox.checked = !osdCheckbox.checked;
+    syncOsdVisibility();
+    saveSettings();
+  }
   if (e.code === 'Space' || e.code === 'Enter') {
     e.preventDefault();
     // Drop focus so Space doesn't also re-activate a focused button on keyup.
@@ -577,8 +767,11 @@ function updateStick(dot, x, y) {
 }
 
 /* ─── Main loop ───────────────────────────────────────────────────── */
+loadSettings();
 syncCalibrationUi();
 syncGameModeUi();
+syncCameraPitch();
+syncOsdVisibility();
 
 const camDirTmp = new THREE.Vector3();
 
@@ -607,12 +800,13 @@ function animate(now) {
 
   if (flightState === 'crashed') {
     crashTimer -= dt;
-    if (crashTimer <= 0) resetDrone();
+    if (crashTimer <= 0) resetDrone(true);
   } else if (flightState === 'ready') {
     // Physics paused: just mirror stick input so the controller can be verified.
     const controls = input.poll(dt);
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
+    attemptAutoArm();
   } else {
     const controls = input.poll(dt);
     drone.update(controls, dt);
@@ -641,12 +835,10 @@ function animate(now) {
       updateGateHud();
     }
 
+    if (!osd.hidden) updateOsd();
+
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
-    const distance = Math.hypot(drone.position.x, drone.position.z);
-    telemetry.textContent =
-      `ALT ${drone.position.y.toFixed(1)} m | SPD ${drone.speed().toFixed(1)} m/s | ` +
-      `DST ${distance.toFixed(0)} m`;
   }
 
   world.update(drone.position);
