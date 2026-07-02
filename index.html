@@ -113,12 +113,31 @@
         <li>RadioMaster: plug in via USB, select "USB Joystick (HID)", move a stick to connect.</li>
         <li>Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset.</li>
       </ul>
-      <p id="arm-hint" hidden>Lower the throttle stick to arm.</p>
       <p id="loading-text">Loading city…</p>
       <button id="start-button" type="button">Start Flying</button>
       <p class="ready-footnote">or press Space / Enter</p>
       <button id="calibrate-button" type="button" class="secondary-button">Calibrate Controller</button>
+      <button id="rates-button" type="button" class="secondary-button">Rates &amp; Expo</button>
       <p id="calibration-status" class="ready-footnote"></p>
+    </div>
+  </div>
+
+  <div id="rates-overlay" hidden>
+    <div class="ready-panel">
+      <h1>Rates &amp; Expo</h1>
+      <p class="rates-hint">Expo softens stick response around center while keeping full deflection at the ends.</p>
+      <canvas id="expo-curve" width="320" height="220"></canvas>
+      <div class="rate-row">
+        <label for="expo-slider">Pitch / Roll Expo</label>
+        <input type="range" id="expo-slider" min="0" max="100" step="5" value="0" />
+        <span class="rate-value" id="expo-value">0%</span>
+      </div>
+      <div class="rate-row">
+        <label for="yaw-expo-slider">Yaw Expo</label>
+        <input type="range" id="yaw-expo-slider" min="0" max="100" step="5" value="0" />
+        <span class="rate-value" id="yaw-expo-value">0%</span>
+      </div>
+      <button id="rates-done" type="button">Done</button>
     </div>
   </div>
 

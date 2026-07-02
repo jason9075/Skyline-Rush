@@ -6,7 +6,7 @@ import { loadBuildingPool } from './buildings.js';
 import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
-import { InputManager } from './input.js';
+import { expoCurve, InputManager } from './input.js';
 import { World } from './world.js';
 
 /* ─── Mirror's Edge colour palette & layout ───────────────────────── */
@@ -224,8 +224,6 @@ style.textContent = `
     color: var(--me-mid); font-size: 0.85rem; line-height: 1.5;
   }
   .ready-panel ul li::before { content: '›'; color: var(--me-red); margin-right: 0.5rem; }
-  #arm-hint { color: var(--me-orange); font-size: 0.9rem; font-weight: 700; }
-  #arm-hint[hidden] { display: none; }
   #loading-text { color: var(--me-mid); font-size: 0.85rem; }
   #loading-text[hidden] { display: none; }
   #start-button {
@@ -248,6 +246,34 @@ style.textContent = `
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
   }
   #calibration-overlay[hidden] { display: none; }
+  #rates-overlay {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
+  }
+  #rates-overlay[hidden] { display: none; }
+  .rates-hint { color: var(--me-mid); font-size: 0.8rem; }
+  #expo-curve {
+    justify-self: center; width: 320px; max-width: 100%;
+    border: 1px solid var(--me-gray); border-radius: 2px;
+    background: var(--me-light);
+  }
+  .rate-row {
+    display: grid; grid-template-columns: 8.5rem 1fr 3rem;
+    align-items: center; gap: 0.6rem; text-align: left;
+  }
+  .rate-row label {
+    color: var(--me-mid); text-transform: uppercase;
+    font-size: 0.7rem; letter-spacing: 0.05em;
+  }
+  .rate-row input[type="range"] { accent-color: var(--me-red); cursor: pointer; }
+  .rate-value { font-family: monospace; font-size: 0.85rem; text-align: right; }
+  #rates-done {
+    justify-self: center; font: inherit; font-size: 0.9rem; cursor: pointer;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 0.55rem 1.8rem; border-radius: 2px;
+    border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
+  }
+  #rates-done:hover { background: var(--me-red-dark); }
   #calib-instruction { min-height: 3em; }
   #calib-status { color: var(--me-orange); font-size: 0.8rem; min-height: 1.2em; font-weight: 700; }
   #calib-axes { display: grid; gap: 0.35rem; }
@@ -307,9 +333,16 @@ const armBanner = document.getElementById('arm-banner');
 const godModeCheckbox = document.getElementById('god-mode');
 const readyOverlay = document.getElementById('ready-overlay');
 const startButton = document.getElementById('start-button');
-const armHint = document.getElementById('arm-hint');
 const loadingText = document.getElementById('loading-text');
 const calibrateButton = document.getElementById('calibrate-button');
+const ratesButton = document.getElementById('rates-button');
+const ratesOverlay = document.getElementById('rates-overlay');
+const ratesDone = document.getElementById('rates-done');
+const expoSlider = document.getElementById('expo-slider');
+const expoValue = document.getElementById('expo-value');
+const yawExpoSlider = document.getElementById('yaw-expo-slider');
+const yawExpoValue = document.getElementById('yaw-expo-value');
+const expoCanvas = document.getElementById('expo-curve');
 const calibrationStatus = document.getElementById('calibration-status');
 const calibrationOverlay = document.getElementById('calibration-overlay');
 const calibInstruction = document.getElementById('calib-instruction');
@@ -510,7 +543,6 @@ function resetDrone(autoStart = false) {
   crashTimer = 0;
   crashCamOrigin = null;
   crashBanner.hidden = true;
-  armHint.hidden = true;
   armBanner.hidden = true;
   pendingAutoStart = autoStart;
   readyOverlay.hidden = autoStart;
@@ -519,28 +551,21 @@ function resetDrone(autoStart = false) {
 }
 
 /**
- * Arm and take control. Refuses to arm while the RC throttle stick is up,
- * so a plugged-in transmitter can't launch the drone unexpectedly.
+ * Dismiss the ready screen and queue arming. The actual throttle-down safety
+ * check lives in {@link attemptAutoArm}, which runs every frame — so Start
+ * always closes the overlay, and flight begins once the stick is confirmed low.
  */
 function startFlying() {
   if (flightState !== 'ready' || wizard.active || !world.ready) return;
-  if (input.activeGamepad() && input.poll(0).throttle > 0.1) {
-    armHint.hidden = false;
-    return;
-  }
-  pendingAutoStart = false;
-  armHint.hidden = true;
-  armBanner.hidden = true;
   readyOverlay.hidden = true;
-  flightState = 'flying';
-  rebuildCourse();
-  syncOsdVisibility();
+  pendingAutoStart = true;
 }
 
 /**
- * Silently retry arming every frame while {@link pendingAutoStart} is set
- * (post-crash rearm): no Start screen, just the same throttle-down safety
- * check as {@link startFlying}, surfaced as a standalone reminder banner.
+ * Retry arming every frame while {@link pendingAutoStart} is set (after
+ * Start or a post-crash respawn). Refuses to arm while the RC throttle
+ * stick is up — so a plugged-in transmitter can't launch the drone
+ * unexpectedly — showing a reminder banner until the stick is lowered.
  */
 function attemptAutoArm() {
   if (!pendingAutoStart || flightState !== 'ready' || wizard.active || !world.ready) return;
@@ -632,6 +657,68 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+/* ─── Rates & Expo ────────────────────────────────────────────────── */
+/** Redraw the expo-curve preview: linear reference plus both active curves. */
+function drawExpoCurve() {
+  const ctx = expoCanvas.getContext('2d');
+  const w = expoCanvas.width;
+  const h = expoCanvas.height;
+  const pad = 12;
+  const toX = (v) => pad + ((v + 1) / 2) * (w - pad * 2);
+  const toY = (v) => h - pad - ((v + 1) / 2) * (h - pad * 2);
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Center axes.
+  ctx.strokeStyle = '#C9D1D6';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(toX(-1), toY(0));
+  ctx.lineTo(toX(1), toY(0));
+  ctx.moveTo(toX(0), toY(-1));
+  ctx.lineTo(toX(0), toY(1));
+  ctx.stroke();
+
+  // Linear reference.
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(toX(-1), toY(-1));
+  ctx.lineTo(toX(1), toY(1));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const plot = (expo, color) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 64; i++) {
+      const x = -1 + (i / 64) * 2;
+      const y = expoCurve(x, expo);
+      if (i === 0) ctx.moveTo(toX(x), toY(y));
+      else ctx.lineTo(toX(x), toY(y));
+    }
+    ctx.stroke();
+  };
+  plot(input.rates.yawExpo, '#4FA3D9');
+  plot(input.rates.expo, '#E0301E');
+
+  // Legend.
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#E0301E';
+  ctx.fillText('PITCH/ROLL', pad + 2, pad + 10);
+  ctx.fillStyle = '#4FA3D9';
+  ctx.fillText('YAW', pad + 2, pad + 24);
+}
+
+/** Push the slider values into the input rates, labels, and curve preview. */
+function syncRates() {
+  input.rates.expo = Number(expoSlider.value) / 100;
+  input.rates.yawExpo = Number(yawExpoSlider.value) / 100;
+  expoValue.textContent = `${expoSlider.value}%`;
+  yawExpoValue.textContent = `${yawExpoSlider.value}%`;
+  drawExpoCurve();
+}
+
 /* ─── Settings persistence ────────────────────────────────────────── */
 const SETTINGS_KEY = 'drone-control.settings';
 
@@ -646,6 +733,8 @@ function saveSettings() {
     channelMap: channelMap.value,
     godMode: godModeCheckbox.checked,
     osd: osdCheckbox.checked,
+    expo: expoSlider.value,
+    yawExpo: yawExpoSlider.value,
   };
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -686,6 +775,12 @@ function loadSettings() {
   }
   if (typeof s.godMode === 'boolean') godModeCheckbox.checked = s.godMode;
   if (typeof s.osd === 'boolean') osdCheckbox.checked = s.osd;
+  if (s.expo !== undefined && Number.isFinite(Number(s.expo))) {
+    expoSlider.value = String(s.expo);
+  }
+  if (s.yawExpo !== undefined && Number.isFinite(Number(s.yawExpo))) {
+    yawExpoSlider.value = String(s.yawExpo);
+  }
 
   drone.flightMode = flightMode.value;
   input.channelMap = channelMap.value;
@@ -702,6 +797,7 @@ settingsModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !settingsModal.hidden) settingsModal.hidden = true;
+  if (e.code === 'Escape' && !ratesOverlay.hidden) ratesOverlay.hidden = true;
 });
 
 channelMap.addEventListener('change', (e) => {
@@ -719,6 +815,16 @@ gameMode.addEventListener('change', () => {
   rebuildCourse();
 });
 difficulty.addEventListener('change', rebuildCourse);
+
+ratesButton.addEventListener('click', () => {
+  drawExpoCurve();
+  ratesOverlay.hidden = false;
+});
+ratesDone.addEventListener('click', () => { ratesOverlay.hidden = true; });
+expoSlider.addEventListener('input', syncRates);
+yawExpoSlider.addEventListener('input', syncRates);
+// Persist on release rather than every drag tick.
+ratesOverlay.addEventListener('change', saveSettings);
 
 calibrateButton.addEventListener('click', () => wizard.start());
 calibNext.addEventListener('click', () => wizard.next());
@@ -772,6 +878,7 @@ syncCalibrationUi();
 syncGameModeUi();
 syncCameraPitch();
 syncOsdVisibility();
+syncRates();
 
 const camDirTmp = new THREE.Vector3();
 

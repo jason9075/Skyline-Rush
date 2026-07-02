@@ -70,6 +70,17 @@ function shapeAxis(value) {
   return Math.max(-1, Math.min(1, value));
 }
 
+/**
+ * Cubic expo (Betaflight-style): softens response around center while
+ * preserving full deflection at the endpoints. expo 0 = linear.
+ * @param {number} value Input in [-1, 1].
+ * @param {number} expo Expo amount in [0, 1].
+ * @returns {number}
+ */
+export function expoCurve(value, expo) {
+  return value * (1 - expo) + value ** 3 * expo;
+}
+
 /** Polls gamepads and keyboard, exposing one normalized ControlInput per frame. */
 export class InputManager {
   /**
@@ -89,6 +100,8 @@ export class InputManager {
     this.keys = new Set();
     /** Keyboard throttle is stateful so W/S nudge it up and down. */
     this.keyboardThrottle = 0;
+    /** Expo amounts in [0, 1] applied to the centered channels. */
+    this.rates = { expo: 0, yawExpo: 0 };
 
     window.addEventListener('gamepadconnected', (e) => {
       this.gamepadIndex = e.gamepad.index;
@@ -130,6 +143,15 @@ export class InputManager {
    * @returns {ControlInput}
    */
   poll(dt) {
+    return this.applyRates(this.pollRaw(dt));
+  }
+
+  /**
+   * Poll input before the rate/expo shaping.
+   * @param {number} dt Frame delta time in seconds.
+   * @returns {ControlInput}
+   */
+  pollRaw(dt) {
     const pad = this.activeGamepad();
     if (pad && pad.axes.length >= 4) {
       if (this.channelMap === 'CUSTOM' && this.calibration) {
@@ -146,6 +168,20 @@ export class InputManager {
       };
     }
     return this.pollKeyboard(dt);
+  }
+
+  /**
+   * Run the centered channels through the configured expo curves.
+   * @param {ControlInput} raw Unshaped input.
+   * @returns {ControlInput}
+   */
+  applyRates(raw) {
+    return {
+      throttle: raw.throttle,
+      yaw: expoCurve(raw.yaw, this.rates.yawExpo),
+      pitch: expoCurve(raw.pitch, this.rates.expo),
+      roll: expoCurve(raw.roll, this.rates.expo),
+    };
   }
 
   /**
