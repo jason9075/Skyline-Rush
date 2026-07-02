@@ -272,25 +272,39 @@ export class InputManager {
    * @returns {ControlInput}
    */
   pollCalibrated(pad) {
-    const { axes, mapping } = this.calibration;
+    return this.calibratedControls(this.calibration, pad.axes);
+  }
+
+  /**
+   * Map raw axis values through a calibration into a ControlInput. Shared by the
+   * live CUSTOM poll and the calibration wizard's pre-save stick preview, so the
+   * on-screen sticks show the exact channel assignment and direction that will
+   * be saved. Channels whose mapping or range isn't ready yet (mid-calibration)
+   * read as neutral.
+   * @param {Calibration} calibration Axis ranges and channel mapping.
+   * @param {number[]} rawAxes Current raw axis values.
+   * @returns {ControlInput}
+   */
+  calibratedControls(calibration, rawAxes) {
+    const { axes, mapping } = calibration;
     /**
      * @param {'yaw'|'pitch'|'roll'} name Centered channel to read.
      * @returns {number}
      */
     const centered = (name) => {
       const m = mapping[name];
-      const range = axes[m.axis];
-      if (!range || pad.axes[m.axis] === undefined) return 0;
-      return shapeAxis(normalizeCentered(range, pad.axes[m.axis]) * (m.invert ? -1 : 1));
+      const range = m && axes[m.axis];
+      if (!range || rawAxes[m.axis] === undefined) return 0;
+      return shapeAxis(normalizeCentered(range, rawAxes[m.axis]) * (m.invert ? -1 : 1));
     };
 
     const t = mapping.throttle;
-    const tRange = axes[t.axis];
+    const tRange = t && axes[t.axis];
     let throttle = 0;
-    if (tRange && pad.axes[t.axis] !== undefined) {
+    if (tRange && rawAxes[t.axis] !== undefined) {
       const span = tRange.max - tRange.min;
       // Throttle sticks don't self-center: map the full travel to 0..1.
-      throttle = span < 1e-6 ? 0 : (pad.axes[t.axis] - tRange.min) / span;
+      throttle = span < 1e-6 ? 0 : (rawAxes[t.axis] - tRange.min) / span;
       if (t.invert) throttle = 1 - throttle;
       throttle = Math.max(0, Math.min(1, throttle));
     }

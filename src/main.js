@@ -8,6 +8,7 @@ import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
 import { expoCurve, InputManager } from './input.js';
+import { StrikeMission, DRONE_HP, BOMB_MAX } from './strike.js';
 import { TouchControls } from './touch.js';
 import { World } from './world.js';
 
@@ -126,6 +127,68 @@ style.textContent = `
   /* Countdown shares the HUD's red; pulses in the final 10 seconds. */
   #gate-timer.urgent { animation: timer-pulse 1s steps(1) infinite; }
   @keyframes timer-pulse { 50% { opacity: 0.35; } }
+  /* Strike HUD mirrors the gate HUD; the HP glyph bar drains as blocks lose
+     their color, and flashes red the moment the drone is hit. */
+  #strike-hud {
+    position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 1.2rem; align-items: center; z-index: 46;
+    color: var(--me-red); font-weight: 800; font-size: 1rem;
+    letter-spacing: 0.05em; font-family: monospace; white-space: nowrap;
+  }
+  #strike-hud[hidden] { display: none; }
+  #strike-hp .spent { color: rgba(27, 30, 32, 0.22); }
+  #strike-hud.hit { animation: strike-hit 0.25s steps(1); }
+  @keyframes strike-hit { 0%, 60% { color: #fff; text-shadow: 0 0 8px var(--me-red); } }
+  /* Bomb icon + drop control, bottom-center. Doubles as the stock display: a
+     recharging bomb darkens and refills bottom-up, and a notification-style
+     red badge on the lower-right shows how many bombs are ready. */
+  #drop-button {
+    position: fixed; bottom: 1.5rem; left: 50%; margin-left: -2rem;
+    width: 4rem; height: 4rem; border-radius: 50%; z-index: 47;
+    border: 2px solid var(--me-red); background: rgba(250, 251, 252, 0.75);
+    backdrop-filter: blur(6px); cursor: pointer; padding: 0;
+    user-select: none; touch-action: manipulation;
+  }
+  #drop-button[hidden] { display: none; }
+  /* On touch, tuck the button against the right edge, above the right stick. */
+  body.touch #drop-button {
+    left: auto; margin-left: 0; transform: none;
+    right: calc(0.6rem + env(safe-area-inset-right, 0px));
+    bottom: calc(5vh + 180px + 0.75rem);
+  }
+  /* Clips the recharge fill to the circle; the badge lives outside this so it
+     isn't cropped by the rounded corner. */
+  #drop-button .drop-face {
+    position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
+  }
+  #drop-button .drop-fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: calc(var(--p, 0) * 100%); background: rgba(224, 48, 30, 0.3);
+    transition: height 0.1s linear;
+  }
+  #drop-button .drop-glyph {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 1.7rem; line-height: 1; z-index: 1;
+  }
+  /* Recharging: the face reads as a shadow until the fill climbs over it. */
+  #drop-button.charging { background: rgba(27, 30, 32, 0.5); }
+  #drop-button.charging .drop-glyph { filter: grayscale(0.7) brightness(0.65); }
+  #drop-button:active { background: var(--me-red); }
+  #drop-button:disabled { cursor: not-allowed; }
+  #drop-button .drop-count {
+    position: absolute; right: -4px; bottom: -4px; z-index: 3;
+    min-width: 1.3rem; height: 1.3rem; padding: 0 0.25rem; box-sizing: border-box;
+    border-radius: 0.75rem; background: var(--me-red); color: #fff;
+    font: 700 0.82rem/1.3rem monospace; text-align: center;
+    box-shadow: 0 0 0 2px rgba(250, 251, 252, 0.95);
+  }
+  /* Pop the icon each time a bomb finishes charging (centering is off transform
+     now, so a plain scale works for both the desktop and touch placements). */
+  #drop-button.pop { animation: bomb-ready 0.35s ease-out; }
+  @keyframes bomb-ready {
+    0% { transform: scale(1.25); box-shadow: 0 0 14px var(--me-red); }
+    100% { transform: scale(1); box-shadow: none; }
+  }
   /* FPV-goggle style OSD: white monospace glyphs with a soft dark halo so
      they read over both the bright sky and white facades. Sits below the
      gate flash (28) and above the scene; never intercepts the pointer. */
@@ -384,8 +447,16 @@ const gateHud = document.getElementById('gate-hud');
 const gateArrow = document.getElementById('gate-arrow');
 const gateInfo = document.getElementById('gate-info');
 const gateTimer = document.getElementById('gate-timer');
+const strikeHud = document.getElementById('strike-hud');
+const strikeEnemies = document.getElementById('strike-enemies');
+const strikeHp = document.getElementById('strike-hp');
+const dropButton = document.getElementById('drop-button');
+const dropCount = document.getElementById('drop-count');
 const resultsOverlay = document.getElementById('results-overlay');
+const resultsTitle = document.getElementById('results-title');
+const resultsSub = document.getElementById('results-sub');
 const resultsScore = document.getElementById('results-score');
+const resultsLabel = document.getElementById('results-label');
 const resultsAgain = document.getElementById('results-again');
 const passFlash = document.getElementById('pass-flash');
 const osd = document.getElementById('osd');
@@ -671,26 +742,40 @@ let pendingAutoStart = false;
 let crashCamOrigin = null;
 /** @type {GateCourse | null} */
 let course = null;
+/** @type {StrikeMission | null} */
+let strike = null;
+/** Last-seen bomb stock, so the icon pops exactly once when a bomb recharges. */
+let prevBombStock = 0;
 
 /**
- * Create or clear the gate course to match the current game mode and flight
- * state. Called on mode/difficulty changes and flight-state transitions, so
- * switching settings mid-flight restarts the course from the drone's position.
+ * Create or clear the active game-mode object to match the current mode and
+ * flight state. Called on mode/difficulty changes and flight-state
+ * transitions, so switching settings mid-flight restarts the mode from the
+ * drone's current position.
  */
-function rebuildCourse() {
-  if (course) {
-    course.dispose();
-    course = null;
-  }
-  if (gameMode.value === 'gate' && flightState === 'flying') {
+function rebuildMode() {
+  if (course) { course.dispose(); course = null; }
+  if (strike) { strike.dispose(); strike = null; }
+
+  if (flightState === 'flying') {
     // Drone faces local -Z; its horizontal facing follows from yaw alone.
     const forward = new THREE.Vector3(-Math.sin(drone.yaw), 0, -Math.cos(drone.yaw));
-    course = new GateCourse(scene, difficulty.value, drone.position, forward);
-    // A fresh course means a fresh run: restart the countdown. Checkpoint
-    // respawns keep the same course object, so they never reach here.
-    gateTimeLeft = GATE_TIME_LIMIT;
+    if (gameMode.value === 'gate') {
+      course = new GateCourse(scene, difficulty.value, drone.position, forward);
+      // A fresh course means a fresh run: restart the countdown. Checkpoint
+      // respawns keep the same course object, so they never reach here.
+      gateTimeLeft = GATE_TIME_LIMIT;
+    } else if (gameMode.value === 'strike') {
+      strike = new StrikeMission(scene, world, drone.position, forward);
+    }
   }
   gateHud.hidden = !course;
+  strikeHud.hidden = !strike;
+  dropButton.hidden = !strike;
+  if (strike) {
+    prevBombStock = strike.bombStock; // no spurious pop on the opening stock
+    updateStrikeHud();
+  }
 }
 
 /** Difficulty only applies to Gate Rush; hide it in other modes. */
@@ -727,6 +812,9 @@ function updateOsd() {
 /* ─── Flight state transitions ────────────────────────────────────── */
 /** Show the crash banner, then return to the ready screen. */
 function crash() {
+  // In Strike a city impact ends the mission and tallies the kills scored so
+  // far, the same as being shot down — there is no checkpoint to resume from.
+  if (strike) { finishStrike(); return; }
   flightState = 'crashed';
   crashTimer = CRASH_DURATION;
   syncOsdVisibility();
@@ -757,7 +845,7 @@ function resetDrone(autoStart = false) {
   armBanner.hidden = true;
   pendingAutoStart = autoStart;
   readyOverlay.hidden = autoStart;
-  rebuildCourse();
+  rebuildMode();
   syncOsdVisibility();
 }
 
@@ -791,7 +879,7 @@ function attemptAutoArm() {
   // A checkpoint resume keeps the live course (and its score/clock); only a
   // fresh Start or full reset builds a new one.
   if (resumeRun) resumeRun = false;
-  else rebuildCourse();
+  else rebuildMode();
   syncOsdVisibility();
 }
 
@@ -829,12 +917,73 @@ function respawnAtCheckpoint() {
 /** End the Gate Rush run when the clock expires and show the results screen. */
 function finishRun() {
   flightState = 'results';
+  resultsTitle.textContent = 'Time!';
+  resultsSub.textContent = 'Gate Rush — 3 minute run';
   resultsScore.textContent = String(course ? course.score : 0);
+  resultsLabel.textContent = 'Gates Cleared';
   resultsOverlay.hidden = false;
   crashBanner.hidden = true;
   armBanner.hidden = true;
   pendingAutoStart = false;
   syncOsdVisibility();
+}
+
+/**
+ * End a Strike mission and show the results screen. The kill tally is the
+ * score whether the drone cleared the force (win), was shot down, or crashed.
+ */
+function finishStrike() {
+  flightState = 'results';
+  const won = strike && strike.status === 'won';
+  resultsTitle.textContent = won ? 'Cleared!' : 'Mission Ended';
+  resultsSub.textContent = won ? 'All hostiles destroyed' : 'Drone down';
+  resultsScore.textContent = String(strike ? strike.killed : 0);
+  resultsLabel.textContent = 'Enemies Destroyed';
+  resultsOverlay.hidden = false;
+  strikeHud.hidden = true;
+  dropButton.hidden = true;
+  crashBanner.hidden = true;
+  armBanner.hidden = true;
+  pendingAutoStart = false;
+  syncOsdVisibility();
+}
+
+/**
+ * Drop a bomb from the current drone pose (Strike mode, in flight). The bomb
+ * inherits the drone's velocity; stock is spent inside the mission.
+ */
+function dropBomb() {
+  if (!strike || flightState !== 'flying') return;
+  strike.dropBomb(drone.position, drone.velocity);
+  updateStrikeHud();
+}
+
+/**
+ * Refresh the Strike HUD: enemies left, the HP glyph bar, and the bottom-center
+ * bomb icon. While the stock is below capacity the icon darkens and refills
+ * bottom-up over the recharge; the red badge shows the ready count and the icon
+ * pops each time a bomb finishes charging.
+ */
+function updateStrikeHud() {
+  if (!strike) return;
+  strikeEnemies.textContent = `ENEMIES ${strike.enemiesLeft}`;
+  const hp = strike.droneHp;
+  strikeHp.innerHTML =
+    `HP ${'█'.repeat(hp)}<span class="spent">${'█'.repeat(DRONE_HP - hp)}</span>`;
+
+  const stock = strike.bombStock;
+  const charging = stock < BOMB_MAX;
+  dropButton.classList.toggle('charging', charging);
+  dropButton.style.setProperty('--p', charging ? strike.regenProgress.toFixed(3) : '0');
+  dropCount.textContent = String(stock);
+  dropButton.disabled = stock <= 0;
+
+  if (stock > prevBombStock) {
+    dropButton.classList.remove('pop');
+    void dropButton.offsetWidth;
+    dropButton.classList.add('pop');
+  }
+  prevBombStock = stock;
 }
 
 /**
@@ -1084,9 +1233,9 @@ osdCheckbox.addEventListener('change', syncOsdVisibility);
 
 gameMode.addEventListener('change', () => {
   syncGameModeUi();
-  rebuildCourse();
+  rebuildMode();
 });
-difficulty.addEventListener('change', rebuildCourse);
+difficulty.addEventListener('change', rebuildMode);
 
 ratesButton.addEventListener('click', () => {
   drawExpoCurve();
@@ -1141,8 +1290,21 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     // Drop focus so Space doesn't also re-activate a focused button on keyup.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    startFlying();
+    // While striking, Space is the bomb release; on the ready screen it still
+    // arms. Enter always arms (its wording is "Start"), never drops.
+    if (e.code === 'Space' && flightState === 'flying' && strike) dropBomb();
+    else startFlying();
   }
+});
+
+// pointerdown, not click: while a finger holds the left stick, mobile browsers
+// suppress the synthetic click on a second-finger tap, so the bomb button felt
+// dead during flight. Pointer events fire per-pointer, independent of the
+// stick's captured pointer, so a two-thumb tap registers.
+dropButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  dropButton.blur();
+  dropBomb();
 });
 
 /* ─── HUD ─────────────────────────────────────────────────────────── */
@@ -1204,7 +1366,9 @@ function animate(now) {
     // Frozen scene behind the results overlay; wait for Play Again.
   } else if (flightState === 'ready') {
     // Physics paused: just mirror stick input so the controller can be verified.
-    const controls = input.poll(dt);
+    // While calibrating, preview the in-progress calibration (not the still-active
+    // old channel map) so the sticks reflect what Save & Finish will commit.
+    const controls = wizard.active ? wizard.previewControls() : input.poll(dt);
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
     attemptAutoArm();
@@ -1241,6 +1405,18 @@ function animate(now) {
         }
         updateGateHud();
       }
+    }
+
+    if (strike && flightState === 'flying') {
+      const { damage } = strike.update(drone.position, dt, godMode);
+      if (damage > 0) {
+        // Flash the HP bar red on each hit (restart even mid-animation).
+        strikeHud.classList.remove('hit');
+        void strikeHud.offsetWidth;
+        strikeHud.classList.add('hit');
+      }
+      updateStrikeHud();
+      if (strike.status !== 'active') finishStrike();
     }
 
     if (!osd.hidden) updateOsd();

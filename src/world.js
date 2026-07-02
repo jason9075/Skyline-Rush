@@ -41,6 +41,10 @@ const COL_MAJOR = [64, 68, 74];
 const COL_MINOR = [88, 92, 98];
 
 /** Streams a deterministic city of building instances around a focus point. */
+/** Reused ray + hit point for {@link World#lineOfSightClear} (no per-call alloc). */
+const LOS_RAY = new THREE.Ray();
+const LOS_HIT = new THREE.Vector3();
+
 export class World {
   /**
    * @param {THREE.Scene} scene Scene to attach world geometry to.
@@ -303,6 +307,39 @@ export class World {
       }
     }
     return false;
+  }
+
+  /**
+   * Segment-vs-building visibility test for enemy line of sight: is the
+   * straight path from `from` to `to` clear of every building AABB in the
+   * chunks the segment passes through? Buildings are the only occluders (the
+   * ground is flat), so a clear ray means the shooter can see the drone.
+   * @param {THREE.Vector3} from Eye/muzzle position.
+   * @param {THREE.Vector3} to Target position.
+   * @returns {boolean} True when nothing blocks the segment.
+   */
+  lineOfSightClear(from, to) {
+    LOS_RAY.origin.copy(from);
+    LOS_RAY.direction.copy(to).sub(from);
+    const dist = LOS_RAY.direction.length();
+    if (dist < 1e-4) return true;
+    LOS_RAY.direction.multiplyScalar(1 / dist);
+
+    const cx0 = Math.floor(Math.min(from.x, to.x) / CHUNK_SIZE) - 1;
+    const cx1 = Math.floor(Math.max(from.x, to.x) / CHUNK_SIZE) + 1;
+    const cz0 = Math.floor(Math.min(from.z, to.z) / CHUNK_SIZE) - 1;
+    const cz1 = Math.floor(Math.max(from.z, to.z) / CHUNK_SIZE) + 1;
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        const chunk = this.chunks.get(`${cx},${cz}`);
+        if (!chunk) continue;
+        for (const { box } of chunk.colliders) {
+          const hit = LOS_RAY.intersectBox(box, LOS_HIT);
+          if (hit && LOS_RAY.origin.distanceToSquared(hit) < dist * dist) return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**

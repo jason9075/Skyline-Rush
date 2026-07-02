@@ -28,6 +28,17 @@ an infinite procedurally generated city, using either a real RC transmitter
   The quadcopter is modelled at true scale (~0.9 m span) against ~20 m buildings.
   Collision is sphere-vs-AABB against nearby chunks; buildings near the camera
   fade to translucent so they never block the view.
+- **Game modes** — *Free Flight*, *Gate Rush* (endless timed slalom through
+  procedural gates), and *Strike* (bombing run): an enemy force — a machine-gun
+  tank and shotgun soldiers — spawns on the open road ahead. The drone carries
+  no gun; a bomb regenerates every few seconds and is dropped with `Space`, with
+  a ~4 m blast (soldiers die in one, the tank in three). Enemies start
+  dormant and only fire once the drone is in range, in line of sight, and inside
+  their vision cone; they lock a lagging aim point and spit tracer rounds that
+  travel, so **staying still gets you hit — keep moving to dodge both the lead
+  and the bullets**. A blast swings nearby dormant heads toward it, so
+  explosions bait aggro. The mission ends when the force is wiped (win) or the
+  drone's 10 HP runs out.
 - **Three camera modes** — Chase (soft follow), FPV, and Top.
 - **Ready screen with arm check** — the sim refuses to arm while the throttle
   stick is up, so a connected transmitter can't launch the drone unexpectedly.
@@ -43,6 +54,7 @@ an infinite procedurally generated city, using either a real RC transmitter
 | `A` / `D` | Yaw left / right |
 | Arrow keys | Pitch / roll |
 | `Space` / `Enter` | Start flying (arm) |
+| `Space` (in flight) | Drop bomb (Strike mode) |
 | `R` | Reset drone |
 | `C` | Cycle camera mode (Chase → FPV → Top) |
 
@@ -92,6 +104,8 @@ GitHub Pages. The production base path is `/drone-control/` (see
 src/
 ├── main.js           # scene, main loop, HUD, cameras, overlays
 ├── drone.js          # quadcopter mesh + angle-mode flight physics
+├── gates.js          # Gate Rush course: planning, guide lines, pass detection
+├── strike.js         # Strike mode: enemy force, weapon AI, bombs, blast damage
 ├── world.js          # chunk streaming: ground tiles, placement, AABB collision
 ├── citygen.js        # deterministic PCG: warped streets, roundabouts, zoning
 ├── buildings.js      # GLB building loader (merges primitives, centers geometry)

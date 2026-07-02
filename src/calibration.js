@@ -144,11 +144,31 @@ export class CalibrationWizard {
     });
 
     if (this.step === 'assign') this.updateAssign(raw, dt);
-    if (this.step === 'wait-neutral' && this.maxDeflection(raw).deflection < NEUTRAL_THRESHOLD) {
+    if (this.step === 'wait-neutral' && this.centeredAxesNeutral(raw)) {
       this.step = this.assignIndex < ASSIGN_STEPS.length ? 'assign' : 'done';
       this.render();
     }
     this.renderBars(raw);
+  }
+
+  /**
+   * True once every self-centering axis has sprung back to neutral — the gate
+   * that must clear before the next axis is captured, so a stick still held
+   * (or overshooting) from the previous gesture can't be grabbed as the next
+   * channel. Unlike {@link maxDeflection} this checks *assigned* centered axes
+   * too (yaw/pitch/roll must physically return), but skips the throttle axis:
+   * throttle rests wherever it's left instead of centering, so requiring it at
+   * neutral would stall the wizard forever.
+   * @param {number[]} raw Raw axis values.
+   * @returns {boolean}
+   */
+  centeredAxesNeutral(raw) {
+    const throttleAxis = this.mapping.throttle ? this.mapping.throttle.axis : -1;
+    for (let i = 0; i < raw.length; i++) {
+      if (i === throttleAxis || !this.axes[i]) continue;
+      if (Math.abs(normalizeCentered(this.axes[i], raw[i])) >= NEUTRAL_THRESHOLD) return false;
+    }
+    return true;
   }
 
   /**
@@ -204,6 +224,20 @@ export class CalibrationWizard {
     }
   }
 
+  /**
+   * Map the live sticks through the calibration captured SO FAR, so the stick
+   * HUD can preview the in-progress result (correct axes AND direction) before
+   * the user commits with Save & Finish. Without this the HUD would keep using
+   * the previously-active channel map, whose axes don't match this controller.
+   * @returns {import('./input.js').ControlInput}
+   */
+  previewControls() {
+    return this.input.calibratedControls(
+      { axes: this.axes, mapping: this.mapping },
+      this.input.rawAxes()
+    );
+  }
+
   /** Refresh instruction text and button states for the current step. */
   render() {
     const d = this.dom;
@@ -223,7 +257,10 @@ export class CalibrationWizard {
         `Step 3/3 (${this.assignIndex + 1}/${ASSIGN_STEPS.length}) — ${gesture}.`;
       d.nextButton.hidden = true;
     } else if (this.step === 'wait-neutral') {
-      d.instruction.textContent = 'Captured. Release the sticks back to neutral...';
+      const next = ASSIGN_STEPS[this.assignIndex];
+      d.instruction.textContent = next
+        ? 'Captured. Release ALL sticks to center — the next step starts once they rest at neutral.'
+        : 'Captured. Release ALL sticks to center to finish.';
       d.nextButton.hidden = true;
     } else if (this.step === 'done') {
       const summary = ASSIGN_STEPS

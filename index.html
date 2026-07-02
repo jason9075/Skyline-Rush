@@ -32,6 +32,7 @@
         <select id="game-mode">
           <option value="free">Free Flight</option>
           <option value="gate" selected>Gate Rush</option>
+          <option value="strike">Strike (Bombing Run)</option>
         </select>
         <label for="difficulty" id="difficulty-label" hidden>Difficulty</label>
         <select id="difficulty" hidden>
@@ -107,12 +108,25 @@
     <span id="gate-info">GATES 0</span>
   </div>
 
+  <div id="strike-hud" hidden>
+    <span id="strike-enemies">ENEMIES 0</span>
+    <span id="strike-hp" aria-label="Drone health">HP ██████████</span>
+  </div>
+
+  <button id="drop-button" type="button" hidden aria-label="Drop bomb">
+    <span class="drop-face">
+      <span class="drop-fill"></span>
+      <span class="drop-glyph">💣</span>
+    </span>
+    <span class="drop-count" id="drop-count">0</span>
+  </button>
+
   <div id="results-overlay" hidden>
     <div class="ready-panel">
-      <h1>Time!</h1>
-      <p>Gate Rush — 3 minute run</p>
+      <h1 id="results-title">Time!</h1>
+      <p id="results-sub">Gate Rush — 3 minute run</p>
       <div id="results-score">0</div>
-      <p class="results-label">Gates Cleared</p>
+      <p class="results-label" id="results-label">Gates Cleared</p>
       <button id="results-again" type="button">Play Again</button>
     </div>
   </div>
