@@ -24,6 +24,14 @@ import { ROADS, roadCenter, isMajor, roundaboutCenter, hasRoundabout } from './c
 const GATE_HALF = 2.5;
 /** Frame bar width and depth, meters. */
 const BAR = 0.3;
+/**
+ * Extra pass tolerance beyond the aperture, meters. In FPV the frame leaves
+ * the field of view ~3m before the plane, so the final approach is flown
+ * blind; grazing the bar should still count rather than silently failing.
+ */
+const PASS_MARGIN = 0.8;
+/** Crossing the plane within this radius but outside the aperture is a miss. */
+const MISS_RADIUS = GATE_HALF * 3;
 /** Road distance between consecutive gates, meters. */
 const STEP_MIN = 70;
 const STEP_MAX = 95;
@@ -405,12 +413,14 @@ export class GateCourse {
 
   /**
    * Advance the wind-streak animation and run pass detection: did the
-   * segment lastPos→dronePos cross the active gate's plane, front-to-back,
-   * inside the aperture? Segment-based so a fast drone can't tunnel through
-   * the plane between frames.
+   * segment lastPos→dronePos cross the active gate's plane, front-to-back?
+   * Segment-based so a fast drone can't tunnel through the plane between
+   * frames. Inside the (tolerance-padded) aperture counts as a pass; crossing
+   * the plane nearby but outside it is reported as a miss so the player gets
+   * feedback instead of silence.
    * @param {THREE.Vector3} dronePos Current drone position.
    * @param {number} dt Frame delta time in seconds.
-   * @returns {boolean} True when a gate was passed this frame.
+   * @returns {'pass' | 'miss' | null} Gate event this frame, if any.
    */
   update(dronePos, dt) {
     this.time += dt;
@@ -420,13 +430,15 @@ export class GateCourse {
     const g = this.gates[0];
     const d0 = TMP_A.copy(this.lastPos).sub(g.pos).dot(g.normal);
     const d1 = TMP_A.copy(dronePos).sub(g.pos).dot(g.normal);
-    let passed = false;
+    let event = null;
     if (d0 < 0 && d1 >= 0) {
       const t = d0 / (d0 - d1);
       const hit = TMP_A.copy(this.lastPos).lerp(dronePos, t).sub(g.pos);
-      const u = TMP_B.set(-g.normal.z, 0, g.normal.x).dot(hit); // across the gate
-      if (Math.abs(u) <= GATE_HALF && Math.abs(hit.y) <= GATE_HALF) {
-        passed = true;
+      const u = Math.abs(TMP_B.set(-g.normal.z, 0, g.normal.x).dot(hit)); // across the gate
+      const v = Math.abs(hit.y);
+      const tol = GATE_HALF + PASS_MARGIN;
+      if (u <= tol && v <= tol) {
+        event = 'pass';
         this.score += 1;
         this.scene.remove(g.mesh);
         if (g.line) {
@@ -436,10 +448,12 @@ export class GateCourse {
         this.gates.shift();
         this.gates.push(this.spawnGate());
         this.promote();
+      } else if (u <= MISS_RADIUS && v <= MISS_RADIUS) {
+        event = 'miss';
       }
     }
     this.lastPos.copy(dronePos);
-    return passed;
+    return event;
   }
 
   /** Remove all course objects from the scene and free GPU resources. */

@@ -122,6 +122,24 @@ style.textContent = `
   }
   #gate-hud[hidden] { display: none; }
   #gate-arrow { display: inline-block; font-size: 1.3rem; }
+  /* Edge vignette pulse on gate events: the screen center stays clear so it
+     never blocks the FPV view. White = pass, red = miss. */
+  #pass-flash {
+    position: fixed; inset: 0; pointer-events: none; z-index: 28; opacity: 0;
+  }
+  #pass-flash.pass, #pass-flash.miss {
+    animation: gate-flash 0.45s ease-out;
+  }
+  #pass-flash.pass { --flash-color: rgba(255, 255, 255, 0.6); }
+  #pass-flash.miss { --flash-color: rgba(224, 48, 30, 0.55); }
+  #pass-flash.pass, #pass-flash.miss {
+    background: radial-gradient(ellipse at center, transparent 55%, var(--flash-color) 100%);
+  }
+  @keyframes gate-flash {
+    0% { opacity: 0; }
+    25% { opacity: 1; }
+    100% { opacity: 0; }
+  }
   #crash-banner {
     position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%);
     color: var(--me-red); font-size: 2.4rem; font-weight: 800;
@@ -213,6 +231,7 @@ const difficultyLabel = document.getElementById('difficulty-label');
 const gateHud = document.getElementById('gate-hud');
 const gateArrow = document.getElementById('gate-arrow');
 const gateInfo = document.getElementById('gate-info');
+const passFlash = document.getElementById('pass-flash');
 const cameraMode = document.getElementById('camera-mode');
 const cameraPitch = document.getElementById('camera-pitch');
 const cameraPitchValue = document.getElementById('camera-pitch-value');
@@ -607,7 +626,13 @@ function animate(now) {
     if (!godMode && world.collides(drone.position, DRONE_RADIUS)) crash();
 
     if (course && flightState === 'flying') {
-      course.update(drone.position, dt);
+      const gateEvent = course.update(drone.position, dt);
+      if (gateEvent) {
+        // Restart the CSS animation even if the previous flash is mid-run.
+        passFlash.className = '';
+        void passFlash.offsetWidth;
+        passFlash.classList.add(gateEvent);
+      }
       updateGateHud();
     }
 
