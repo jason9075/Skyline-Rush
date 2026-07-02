@@ -32,49 +32,87 @@ function wrapAngle(a) {
 }
 
 /**
- * Build the visual quadcopter mesh (frame, four arms, rotors, canopy).
+ * Build the visual quadcopter mesh: a twin-plate carbon frame with an FPV
+ * camera pod, metallic motors, and true 2-blade propellers. The solid blades
+ * are visible at rest; a translucent blur disc crossfades in as they spin up
+ * (opacities animated in {@link Drone#syncMesh}). Shared blade/disc materials
+ * are stashed on `group.userData` for that crossfade.
  * @returns {THREE.Group}
  */
 function buildDroneMesh() {
   const group = new THREE.Group();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2A2E31, roughness: 0.6 });
-  const rotorMat = new THREE.MeshStandardMaterial({
-    color: 0xE0301E,
-    transparent: true,
-    opacity: 0.5,
-    side: THREE.DoubleSide,
+
+  const carbonMat = new THREE.MeshStandardMaterial({ color: 0x17191B, roughness: 0.45, metalness: 0.4 });
+  const accentMat = new THREE.MeshStandardMaterial({ color: 0xE0301E, roughness: 0.35, metalness: 0.1 });
+  const motorMat = new THREE.MeshStandardMaterial({ color: 0x9AA1A6, roughness: 0.3, metalness: 0.85 });
+  const bladeMat = new THREE.MeshStandardMaterial({
+    color: 0x2A2E31, roughness: 0.5, metalness: 0.2, transparent: true, side: THREE.DoubleSide,
   });
-  const canopyMat = new THREE.MeshStandardMaterial({ color: 0xE0301E, roughness: 0.4 });
+  const discMat = new THREE.MeshStandardMaterial({
+    color: 0xE0301E, roughness: 0.4, transparent: true, opacity: 0,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.12, 0.5), frameMat);
-  group.add(body);
+  // Twin-plate carbon stack.
+  const lower = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.5), carbonMat);
+  lower.position.y = -0.02;
+  group.add(lower);
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.045, 0.34), carbonMat);
+  upper.position.y = 0.055;
+  group.add(upper);
 
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.22), canopyMat);
-  canopy.position.set(0, 0.1, -0.08);
-  group.add(canopy);
+  // FPV camera pod up front (drone faces -Z), tilted back like a real quad.
+  const pod = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.13, 0.13), accentMat);
+  pod.position.set(0, 0.12, -0.16);
+  pod.rotation.x = -0.3;
+  group.add(pod);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.05, 14), motorMat);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0, 0.14, -0.24);
+  group.add(lens);
 
-  const armGeo = new THREE.BoxGeometry(0.75, 0.04, 0.07);
-  const rotorGeo = new THREE.CircleGeometry(0.22, 24);
+  const armGeo = new THREE.BoxGeometry(0.44, 0.028, 0.05);
+  const motorGeo = new THREE.CylinderGeometry(0.055, 0.065, 0.08, 16);
+  const hubGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.04, 10);
+  const PROP_R = 0.24;
+  const bladeGeo = new THREE.BoxGeometry(PROP_R * 2, 0.006, 0.055);
+  const discGeo = new THREE.CircleGeometry(PROP_R, 28);
   const rotorPositions = [
-    [0.32, -0.32],
-    [-0.32, -0.32],
-    [0.32, 0.32],
-    [-0.32, 0.32],
+    [0.3, -0.3],
+    [-0.3, -0.3],
+    [0.3, 0.3],
+    [-0.3, 0.3],
   ];
 
   for (const [i, [x, z]] of rotorPositions.entries()) {
-    const arm = new THREE.Mesh(armGeo, frameMat);
-    arm.position.set(x / 2, 0, z / 2);
+    const arm = new THREE.Mesh(armGeo, carbonMat);
+    arm.position.set(x / 2, -0.01, z / 2);
     arm.rotation.y = Math.atan2(-z, x);
     group.add(arm);
 
-    const rotor = new THREE.Mesh(rotorGeo, rotorMat);
-    rotor.rotation.x = -Math.PI / 2;
-    rotor.position.set(x, 0.05, z);
-    rotor.name = `rotor-${i}`;
-    group.add(rotor);
+    const motor = new THREE.Mesh(motorGeo, motorMat);
+    motor.position.set(x, 0.03, z);
+    group.add(motor);
+
+    // Spinning assembly: 2-blade prop + hub, spun about Y by syncMesh.
+    const prop = new THREE.Group();
+    prop.position.set(x, 0.09, z);
+    prop.name = `rotor-${i}`;
+    prop.add(new THREE.Mesh(bladeGeo, bladeMat));
+    prop.add(new THREE.Mesh(hubGeo, motorMat));
+    group.add(prop);
+
+    const disc = new THREE.Mesh(discGeo, discMat);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set(x, 0.095, z);
+    disc.name = `disc-${i}`;
+    group.add(disc);
   }
-  group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+
+  // The blur disc must not cast a (permanent, opacity-blind) shadow at idle.
+  group.traverse((o) => { if (o.isMesh) o.castShadow = !o.name.startsWith('disc-'); });
+  group.userData.bladeMat = bladeMat;
+  group.userData.discMat = discMat;
   return group;
 }
 
@@ -148,11 +186,18 @@ export class Drone {
   syncMesh() {
     this.mesh.position.copy(this.position);
     this.mesh.rotation.set(this.pitch, this.yaw, this.roll, 'YXZ');
-    const spin = 0.3 + this.throttle * 1.2;
+    // Props are stopped at idle (so the blades read clearly, e.g. on the ready
+    // screen) and spin up with throttle, alternating direction like a real
+    // quad. As they spin, the solid blades fade into the blur disc.
+    const spin = this.throttle * 1.4;
     for (let i = 0; i < 4; i++) {
       const rotor = this.mesh.getObjectByName(`rotor-${i}`);
-      if (rotor) rotor.rotation.z += (i % 2 === 0 ? spin : -spin);
+      if (rotor) rotor.rotation.y += (i % 2 === 0 ? spin : -spin);
     }
+    const blur = Math.min(1, this.throttle / 0.22);
+    const { bladeMat, discMat } = this.mesh.userData;
+    if (bladeMat) bladeMat.opacity = 1 - 0.8 * blur;
+    if (discMat) discMat.opacity = 0.5 * blur;
   }
 
   /** Return the drone to its spawn point with zeroed state. */
