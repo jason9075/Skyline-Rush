@@ -17,9 +17,18 @@ generated field of box obstacles, using either a real RC transmitter
 - **Controller calibration wizard** — sweeps axis ranges, captures stick
   centers, and auto-detects channel assignment and direction per control.
   Results persist in `localStorage`.
-- **Infinite procedural world** — obstacles stream in as deterministic chunks
-  seeded by their coordinates, so any area looks the same on every visit while
-  the world extends forever. Collision is sphere-vs-AABB against nearby chunks.
+- **Infinite procedural city** — a deterministic street network (see
+  `citygen.js`): a regular grid is domain-warped into gently **curving streets**,
+  with wide **arterials** every third line, narrow alleys between, and
+  **roundabouts** at a low probability where arterials cross. Real Taipei
+  building models (`assets/buildings/`, glTF binary) are placed on the resulting
+  blocks — each sized to fit the local clearance, oriented toward the nearest
+  road, and picked from a height bucket chosen by a low-frequency downtown/
+  outskirts zone. Every area is identical on every visit while the city extends
+  forever; the curved roads are rasterized into each chunk's ground texture.
+  The quadcopter is modelled at true scale (~0.9 m span) against ~20 m buildings.
+  Collision is sphere-vs-AABB against nearby chunks; buildings near the camera
+  fade to translucent so they never block the view.
 - **Three camera modes** — Chase (soft follow), FPV, and Top.
 - **Ready screen with arm check** — the sim refuses to arm while the throttle
   stick is up, so a connected transmitter can't launch the drone unexpectedly.
@@ -84,7 +93,9 @@ GitHub Pages. The production base path is `/drone-control/` (see
 src/
 ├── main.js           # scene, main loop, HUD, cameras, overlays
 ├── drone.js          # quadcopter mesh + angle-mode flight physics
-├── world.js          # infinite chunked obstacle field, AABB collision
+├── world.js          # chunk streaming: ground tiles, placement, AABB collision
+├── citygen.js        # deterministic PCG: warped streets, roundabouts, zoning
+├── buildings.js      # GLB building loader (merges primitives, centers geometry)
 ├── input.js          # Gamepad API + keyboard input, calibration storage
 └── calibration.js    # controller calibration wizard
 ```

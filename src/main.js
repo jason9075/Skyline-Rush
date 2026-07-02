@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 import hdrSkyUrl from '../assets/kloofendal_48d_partly_cloudy_puresky_1k.hdr?url';
+import { loadBuildingPool } from './buildings.js';
 import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { InputManager } from './input.js';
@@ -104,6 +105,8 @@ style.textContent = `
   .ready-panel ul li::before { content: '›'; color: var(--me-red); margin-right: 0.5rem; }
   #arm-hint { color: var(--me-orange); font-size: 0.9rem; font-weight: 700; }
   #arm-hint[hidden] { display: none; }
+  #loading-text { color: var(--me-mid); font-size: 0.85rem; }
+  #loading-text[hidden] { display: none; }
   #start-button {
     justify-self: center; font: inherit; font-size: 1rem; cursor: pointer;
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
@@ -111,6 +114,7 @@ style.textContent = `
     border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
   }
   #start-button:hover { background: var(--me-red-dark); border-color: var(--me-red-dark); }
+  #start-button:disabled { background: var(--me-gray); border-color: var(--me-gray); cursor: wait; }
   .ready-footnote { color: var(--me-mid); font-size: 0.75rem; }
   .secondary-button {
     justify-self: center; font: inherit; font-size: 0.85rem; cursor: pointer;
@@ -165,6 +169,7 @@ const godModeCheckbox = document.getElementById('god-mode');
 const readyOverlay = document.getElementById('ready-overlay');
 const startButton = document.getElementById('start-button');
 const armHint = document.getElementById('arm-hint');
+const loadingText = document.getElementById('loading-text');
 const calibrateButton = document.getElementById('calibrate-button');
 const calibrationStatus = document.getElementById('calibration-status');
 const calibrationOverlay = document.getElementById('calibration-overlay');
@@ -191,7 +196,7 @@ new RGBELoader().load(hdrSkyUrl, (texture) => {
   scene.environment = texture;
 });
 
-const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 300);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 500);
 
 // The HDR environment supplies most ambient light; the sun adds direction.
 const sun = new THREE.DirectionalLight(0xFFFFFF, 1.8);
@@ -202,7 +207,20 @@ scene.add(new THREE.AmbientLight(0xE8F2F8, 0.3));
 // Spawn resting on the ground so the drone doesn't free-fall on load.
 const SPAWN = new THREE.Vector3(0, DRONE_RADIUS, 0);
 const world = new World(scene);
-world.update(SPAWN);
+world.maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+
+// The city geometry loads asynchronously; gate takeoff until it's ready.
+startButton.disabled = true;
+loadBuildingPool()
+  .then((pool) => {
+    world.setPool(pool, SPAWN);
+    loadingText.hidden = true;
+    startButton.disabled = false;
+  })
+  .catch((err) => {
+    console.error('Failed to load building pool:', err);
+    loadingText.textContent = 'Failed to load city geometry — see console.';
+  });
 
 const drone = new Drone(SPAWN);
 scene.add(drone.mesh);
@@ -261,7 +279,7 @@ function resetDrone() {
  * so a plugged-in transmitter can't launch the drone unexpectedly.
  */
 function startFlying() {
-  if (flightState !== 'ready' || wizard.active) return;
+  if (flightState !== 'ready' || wizard.active || !world.ready) return;
   if (input.activeGamepad() && input.poll(0).throttle > 0.1) {
     armHint.hidden = false;
     return;
@@ -398,7 +416,7 @@ function animate(now) {
   world.update(drone.position);
 
   updateCamera();
-  world.fadeNear(camera.position);
+  world.fadeNear(camera.position, cameraMode.value !== 'fpv');
   renderer.render(scene, camera);
 }
 requestAnimationFrame(animate);

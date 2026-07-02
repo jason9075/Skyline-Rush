@@ -7,5 +7,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // Keep building GLBs as separate cacheable assets — after slimming many
+    // fall below the inline threshold and would otherwise bloat the JS bundle.
+    assetsInlineLimit: (file) => (file.endsWith('.glb') ? false : undefined),
   },
 });
