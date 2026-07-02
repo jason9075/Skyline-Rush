@@ -313,6 +313,10 @@ style.textContent = `
   /* Touch devices drive the on-screen pads, so the desktop stick HUD and
      keyboard hints are redundant — hide them to keep the view clear. */
   body.touch #hud, body.touch #info { display: none; }
+  /* Kill double-tap-to-zoom and the tap delay; single-finger scrolling (a tall
+     settings modal) still works. Pinch is blocked by the viewport meta and the
+     gesture handlers in the isTouch block. */
+  body.touch { touch-action: manipulation; }
   /* Move the SPD/ALT readout to the top-left on touch: its default bottom-right
      spot sits under the right joystick pad. */
   body.touch #osd-info {
@@ -462,6 +466,18 @@ const input = new InputManager((status) => {
 if (isTouch) {
   document.body.classList.add('touch');
   input.setTouchControls(new TouchControls());
+
+  // Block pinch-zoom so two-thumb stick input never zooms the page. The pads
+  // drive off Pointer Events, so cancelling multi-touch touchmove (and iOS's
+  // gesture events, which ignore user-scalable=no) leaves the sticks working.
+  document.addEventListener(
+    'touchmove',
+    (e) => { if (e.touches.length > 1) e.preventDefault(); },
+    { passive: false }
+  );
+  for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(type, (e) => e.preventDefault());
+  }
 }
 
 /* ─── Input device selector ───────────────────────────────────────── */
