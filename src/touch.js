@@ -12,7 +12,7 @@
  */
 
 /** Max distance (px) the knob center travels from its base center. */
-const TRAVEL = 50;
+const TRAVEL = 64;
 
 /**
  * Clamp a value into [-1, 1].
@@ -74,15 +74,15 @@ export class TouchControls {
     style.textContent = `
       #touch-controls { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
       #touch-controls .touch-pad {
-        position: absolute; bottom: 6vh; width: 150px; height: 150px;
+        position: absolute; bottom: 5vh; width: 180px; height: 180px;
         border-radius: 50%; pointer-events: auto; touch-action: none;
         border: 1px solid var(--me-gray); background: rgba(255, 255, 255, 0.35);
         backdrop-filter: blur(2px);
       }
-      #touch-controls .touch-pad.left { left: 5vw; }
-      #touch-controls .touch-pad.right { right: 5vw; }
+      #touch-controls .touch-pad.left { left: 4vw; }
+      #touch-controls .touch-pad.right { right: 4vw; }
       #touch-controls .touch-knob {
-        position: absolute; left: 50%; top: 50%; width: 60px; height: 60px;
+        position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
         border-radius: 50%; background: var(--me-red);
         box-shadow: 0 2px 8px rgba(27, 30, 32, 0.3);
         transform: translate(-50%, -50%);
