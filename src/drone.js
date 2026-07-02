@@ -30,14 +30,14 @@ export const DRONE_RADIUS = 0.45;
  */
 function buildDroneMesh() {
   const group = new THREE.Group();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x4C566A, roughness: 0.6 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2A2E31, roughness: 0.6 });
   const rotorMat = new THREE.MeshStandardMaterial({
-    color: 0x88C0D0,
+    color: 0xE0301E,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.5,
     side: THREE.DoubleSide,
   });
-  const canopyMat = new THREE.MeshStandardMaterial({ color: 0xBF616A, roughness: 0.4 });
+  const canopyMat = new THREE.MeshStandardMaterial({ color: 0xE0301E, roughness: 0.4 });
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.12, 0.5), frameMat);
   group.add(body);

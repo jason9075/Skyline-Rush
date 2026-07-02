@@ -21,9 +21,13 @@
     <select id="channel-map">
       <option value="AETR">AETR</option>
       <option value="TAER">TAER</option>
+      <option value="CUSTOM">Custom (calibrated)</option>
     </select>
+    <label class="toggle-label" for="god-mode">
+      <input type="checkbox" id="god-mode" />
+      God Mode
+    </label>
     <button id="reset-button" type="button">Reset Drone</button>
-    <button id="open-math" class="icon-button" type="button" aria-haspopup="dialog" aria-controls="math-modal" aria-label="Explain the math">💡</button>
   </div>
 
   <canvas id="canvas"></canvas>
@@ -41,18 +45,35 @@
     </div>
   </div>
 
-  <div id="crash-banner" hidden>CRASHED — resetting...</div>
+  <div id="crash-banner" hidden>CRASHED</div>
 
-  <div id="math-modal" role="dialog" aria-modal="true" aria-labelledby="math-title" hidden>
-    <div class="modal-panel">
-      <div class="modal-header">
-        <h2 id="math-title">Math Behind the Scene</h2>
-        <div class="modal-actions">
-          <button id="language-toggle" class="modal-toggle" type="button">Eng/中</button>
-          <button id="close-math" class="modal-toggle" type="button" aria-label="Close">Close</button>
-        </div>
+  <div id="ready-overlay">
+    <div class="ready-panel">
+      <h1>Drone Flight Simulator</h1>
+      <p>Fly a quadcopter through the obstacle field.</p>
+      <ul>
+        <li>RadioMaster: plug in via USB, select "USB Joystick (HID)", move a stick to connect.</li>
+        <li>Keyboard: W/S throttle, A/D yaw, Arrow keys pitch/roll, R reset.</li>
+      </ul>
+      <p id="arm-hint" hidden>Lower the throttle stick to arm.</p>
+      <button id="start-button" type="button">Start Flying</button>
+      <p class="ready-footnote">or press Space / Enter</p>
+      <button id="calibrate-button" type="button" class="secondary-button">Calibrate Controller</button>
+      <p id="calibration-status" class="ready-footnote"></p>
+    </div>
+  </div>
+
+  <div id="calibration-overlay" hidden>
+    <div class="ready-panel">
+      <h1>Controller Calibration</h1>
+      <p id="calib-instruction"></p>
+      <div id="calib-axes" aria-label="Live axis values"></div>
+      <p id="calib-status"></p>
+      <div class="calib-actions">
+        <button id="calib-next" type="button">Next</button>
+        <button id="calib-cancel" type="button" class="secondary-button">Cancel</button>
+        <button id="calib-clear" type="button" class="secondary-button">Clear Saved</button>
       </div>
-      <div id="math-content" class="modal-body"></div>
     </div>
   </div>
 

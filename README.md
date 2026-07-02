@@ -1,8 +1,10 @@
 # drone-control
 
-A browser-based 3D drone flight simulator built with [Three.js](https://threejs.org/).
-Fly a quadcopter through a procedurally placed field of box obstacles, using either
-a real RC transmitter (e.g. RadioMaster) over USB or the keyboard.
+A browser-based 3D drone flight simulator built with [Three.js](https://threejs.org/),
+styled after the Mirror's Edge palette — a white city under a bright sky, with
+signature red accents. Fly a quadcopter through an infinite procedurally
+generated field of box obstacles, using either a real RC transmitter
+(e.g. RadioMaster) over USB or the keyboard.
 
 ## Features
 
@@ -15,14 +17,14 @@ a real RC transmitter (e.g. RadioMaster) over USB or the keyboard.
 - **Controller calibration wizard** — sweeps axis ranges, captures stick
   centers, and auto-detects channel assignment and direction per control.
   Results persist in `localStorage`.
-- **Obstacle course** — deterministic PRNG places the same box field on every
-  load, with a clear zone around the spawn pad. Collision is sphere-vs-AABB.
+- **Infinite procedural world** — obstacles stream in as deterministic chunks
+  seeded by their coordinates, so any area looks the same on every visit while
+  the world extends forever. Collision is sphere-vs-AABB against nearby chunks.
 - **Three camera modes** — Chase (soft follow), FPV, and Top.
 - **Ready screen with arm check** — the sim refuses to arm while the throttle
   stick is up, so a connected transmitter can't launch the drone unexpectedly.
-- **Math explainer** — the 💡 button opens a KaTeX-rendered modal covering the
-  quaternion attitude math, Newtonian integration, stick response easing, AABB
-  collision distance, and Gamepad API input shaping (English / Traditional Chinese).
+- **God Mode** — a control-panel toggle that disables crashing; hard landings
+  and obstacle hits no longer reset the flight.
 
 ## Controls
 
@@ -81,10 +83,9 @@ GitHub Pages. The production base path is `/drone-control/` (see
 src/
 ├── main.js           # scene, main loop, HUD, cameras, overlays
 ├── drone.js          # quadcopter mesh + angle-mode flight physics
-├── world.js          # ground, obstacle field, AABB collision
+├── world.js          # infinite chunked obstacle field, AABB collision
 ├── input.js          # Gamepad API + keyboard input, calibration storage
-├── calibration.js    # controller calibration wizard
-└── modal-content.js  # bilingual math explainer copy
+└── calibration.js    # controller calibration wizard
 ```
 
 ## License

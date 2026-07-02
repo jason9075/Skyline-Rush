@@ -23,6 +23,35 @@ const CHANNEL_MAPS = {
   TAER: { throttle: 0, roll: 1, pitch: 2, yaw: 3 },
 };
 
+/** localStorage key for persisted calibration data. */
+const CALIBRATION_KEY = 'drone-control.calibration';
+
+/**
+ * @typedef {Object} AxisRange
+ * @property {number} min Raw minimum seen during calibration.
+ * @property {number} center Raw neutral position.
+ * @property {number} max Raw maximum seen during calibration.
+ */
+
+/**
+ * @typedef {Object} Calibration
+ * @property {AxisRange[]} axes Per-axis raw ranges.
+ * @property {Record<'throttle'|'yaw'|'pitch'|'roll', {axis: number, invert: boolean}>} mapping
+ */
+
+/**
+ * Normalize a raw axis value against its calibrated range, centered at
+ * neutral: returns -1..1 with 0 at the calibrated center.
+ * @param {AxisRange} range Calibrated range.
+ * @param {number} raw Raw axis value.
+ * @returns {number}
+ */
+export function normalizeCentered(range, raw) {
+  const span = raw >= range.center ? range.max - range.center : range.center - range.min;
+  if (span < 1e-6) return 0;
+  return Math.max(-1, Math.min(1, (raw - range.center) / span));
+}
+
 /**
  * @typedef {Object} ControlInput
  * @property {number} throttle 0..1
@@ -49,6 +78,9 @@ export class InputManager {
   constructor(onStatusChange) {
     /** @type {string} */
     this.channelMap = 'AETR';
+    /** @type {Calibration | null} */
+    this.calibration = InputManager.loadCalibration();
+    if (this.calibration) this.channelMap = 'CUSTOM';
     /** @type {number | null} */
     this.gamepadIndex = null;
     /** @type {(status: string) => void} */
@@ -90,7 +122,10 @@ export class InputManager {
   poll(dt) {
     const pad = this.activeGamepad();
     if (pad && pad.axes.length >= 4) {
-      const map = CHANNEL_MAPS[this.channelMap];
+      if (this.channelMap === 'CUSTOM' && this.calibration) {
+        return this.pollCalibrated(pad);
+      }
+      const map = CHANNEL_MAPS[this.channelMap] ?? CHANNEL_MAPS.AETR;
       return {
         // RC throttle axis: -1 = stick down (idle), +1 = stick up (full).
         throttle: Math.max(0, Math.min(1, (pad.axes[map.throttle] + 1) / 2)),
@@ -119,6 +154,85 @@ export class InputManager {
       pitch: (k.has('ArrowUp') ? 1 : 0) - (k.has('ArrowDown') ? 1 : 0),
       roll: (k.has('ArrowRight') ? 1 : 0) - (k.has('ArrowLeft') ? 1 : 0),
     };
+  }
+
+  /**
+   * Read input through the user's saved calibration: per-axis ranges,
+   * detected channel assignment, and per-channel inversion.
+   * @param {Gamepad} pad Active gamepad.
+   * @returns {ControlInput}
+   */
+  pollCalibrated(pad) {
+    const { axes, mapping } = this.calibration;
+    /**
+     * @param {'yaw'|'pitch'|'roll'} name Centered channel to read.
+     * @returns {number}
+     */
+    const centered = (name) => {
+      const m = mapping[name];
+      const range = axes[m.axis];
+      if (!range || pad.axes[m.axis] === undefined) return 0;
+      return shapeAxis(normalizeCentered(range, pad.axes[m.axis]) * (m.invert ? -1 : 1));
+    };
+
+    const t = mapping.throttle;
+    const tRange = axes[t.axis];
+    let throttle = 0;
+    if (tRange && pad.axes[t.axis] !== undefined) {
+      const span = tRange.max - tRange.min;
+      // Throttle sticks don't self-center: map the full travel to 0..1.
+      throttle = span < 1e-6 ? 0 : (pad.axes[t.axis] - tRange.min) / span;
+      if (t.invert) throttle = 1 - throttle;
+      throttle = Math.max(0, Math.min(1, throttle));
+    }
+    return { throttle, yaw: centered('yaw'), pitch: centered('pitch'), roll: centered('roll') };
+  }
+
+  /**
+   * Raw axis snapshot of the active gamepad (for the calibration UI).
+   * @returns {number[]}
+   */
+  rawAxes() {
+    const pad = this.activeGamepad();
+    return pad ? Array.from(pad.axes) : [];
+  }
+
+  /**
+   * Persist and activate a new calibration.
+   * @param {Calibration} calibration Wizard result.
+   */
+  setCalibration(calibration) {
+    this.calibration = calibration;
+    this.channelMap = 'CUSTOM';
+    try {
+      localStorage.setItem(CALIBRATION_KEY, JSON.stringify(calibration));
+    } catch (err) {
+      console.warn('Failed to persist calibration:', err);
+    }
+  }
+
+  /** Remove the saved calibration and fall back to the AETR default. */
+  clearCalibration() {
+    this.calibration = null;
+    this.channelMap = 'AETR';
+    localStorage.removeItem(CALIBRATION_KEY);
+  }
+
+  /**
+   * Load a previously saved calibration, if any.
+   * @returns {Calibration | null}
+   */
+  static loadCalibration() {
+    try {
+      const raw = localStorage.getItem(CALIBRATION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !Array.isArray(parsed.axes) || !parsed.mapping) return null;
+      return parsed;
+    } catch (err) {
+      console.warn('Failed to load calibration:', err);
+      return null;
+    }
   }
 
   /** Reset stateful keyboard throttle (e.g. after a crash). */
