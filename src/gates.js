@@ -387,6 +387,12 @@ export class GateCourse {
         };
     /** The tail end of the previous guide line; the next one starts there. */
     this.prevAnchor = startPos.clone();
+    /**
+     * Last cleared checkpoint — the pose a crashed drone resumes the run from.
+     * Starts at the takeoff pose and advances to each gate as it's passed.
+     * @type {{pos: THREE.Vector3, forward: THREE.Vector3}}
+     */
+    this.checkpoint = { pos: startPos.clone(), forward: forward.clone() };
     /** @type {{pos: THREE.Vector3, normal: THREE.Vector3, mesh: THREE.Mesh, lines: THREE.Line[]}[]} */
     this.gates = [this.spawnGate(true), this.spawnGate()];
     this.promote();
@@ -470,6 +476,16 @@ export class GateCourse {
   }
 
   /**
+   * Rebase pass-detection tracking after a checkpoint respawn, so the first
+   * post-respawn frame doesn't read a spurious plane crossing from the drone's
+   * pre-crash position.
+   * @param {THREE.Vector3} pos Respawn position.
+   */
+  resumeFrom(pos) {
+    this.lastPos.copy(pos);
+  }
+
+  /**
    * Advance the wind-streak animation and run pass detection: did the
    * segment lastPos→dronePos cross the active gate's plane, front-to-back?
    * Segment-based so a fast drone can't tunnel through the plane between
@@ -498,6 +514,8 @@ export class GateCourse {
       if (u <= tol && v <= tol) {
         event = 'pass';
         this.score += 1;
+        // Advance the respawn checkpoint to the gate just cleared.
+        this.checkpoint = { pos: g.pos.clone(), forward: g.normal.clone() };
         this.scene.remove(g.mesh);
         for (const l of g.lines) {
           this.scene.remove(l);

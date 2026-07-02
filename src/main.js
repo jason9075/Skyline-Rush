@@ -123,6 +123,9 @@ style.textContent = `
   }
   #gate-hud[hidden] { display: none; }
   #gate-arrow { display: inline-block; font-size: 1.3rem; }
+  /* Countdown shares the HUD's red; pulses in the final 10 seconds. */
+  #gate-timer.urgent { animation: timer-pulse 1s steps(1) infinite; }
+  @keyframes timer-pulse { 50% { opacity: 0.35; } }
   /* FPV-goggle style OSD: white monospace glyphs with a soft dark halo so
      they read over both the bright sky and white facades. Sits below the
      gate flash (28) and above the scene; never intercepts the pointer. */
@@ -204,18 +207,41 @@ style.textContent = `
     z-index: 30;
   }
   #arm-banner[hidden] { display: none; }
-  #ready-overlay {
+  #ready-overlay, #results-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 40;
   }
-  #ready-overlay[hidden] { display: none; }
+  #ready-overlay[hidden], #results-overlay[hidden] { display: none; }
+  /* Results screen shares the ready panel styling; the score is the hero. */
+  #results-score {
+    font-family: monospace; font-size: 4.5rem; font-weight: 800;
+    color: var(--me-red); line-height: 1;
+  }
+  .results-label {
+    color: var(--me-mid); text-transform: uppercase;
+    font-size: 0.75rem; letter-spacing: 0.12em;
+  }
+  #results-again {
+    justify-self: center; font: inherit; font-size: 1rem; cursor: pointer;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 0.7rem 2.2rem; border-radius: 2px;
+    border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
+  }
+  #results-again:hover { background: var(--me-red-dark); border-color: var(--me-red-dark); }
   .ready-panel {
+    position: relative;
     width: min(520px, calc(100vw - 2rem)); padding: 2rem;
     background: var(--me-panel); border: 1px solid var(--me-gray); border-radius: 2px;
     border-top: 4px solid var(--me-red);
     box-shadow: 0 20px 60px rgba(27, 30, 32, 0.18);
     display: grid; gap: 1rem; text-align: center;
   }
+  /* Source link, pinned to the panel corner. */
+  #github-link {
+    position: absolute; top: 1rem; right: 1rem;
+    display: inline-flex; color: var(--me-mid); transition: color 0.15s;
+  }
+  #github-link:hover { color: var(--me-red); }
   .ready-panel h1 {
     font-size: 1.3rem; color: var(--me-dark);
     text-transform: uppercase; letter-spacing: 0.08em;
@@ -357,6 +383,10 @@ const difficultyLabel = document.getElementById('difficulty-label');
 const gateHud = document.getElementById('gate-hud');
 const gateArrow = document.getElementById('gate-arrow');
 const gateInfo = document.getElementById('gate-info');
+const gateTimer = document.getElementById('gate-timer');
+const resultsOverlay = document.getElementById('results-overlay');
+const resultsScore = document.getElementById('results-score');
+const resultsAgain = document.getElementById('results-again');
 const passFlash = document.getElementById('pass-flash');
 const osd = document.getElementById('osd');
 const osdCheckbox = document.getElementById('osd-toggle');
@@ -617,10 +647,19 @@ const binder = new AxisBinder(
 );
 
 /* ─── State ───────────────────────────────────────────────────────── */
-/** @type {'ready' | 'flying' | 'crashed'} */
+/** @type {'ready' | 'flying' | 'crashed' | 'results'} */
 let flightState = 'ready';
 let crashTimer = 0;
 const CRASH_DURATION = 1.2;
+/** Gate Rush run length, seconds. */
+const GATE_TIME_LIMIT = 180;
+/** Seconds remaining in the current Gate Rush run; only counts down while flying. */
+let gateTimeLeft = GATE_TIME_LIMIT;
+/**
+ * True while arming a checkpoint respawn, so {@link attemptAutoArm} keeps the
+ * existing course (preserving score and clock) instead of building a new one.
+ */
+let resumeRun = false;
 /** True while waiting to auto-rearm after a crash, without a manual Start press. */
 let pendingAutoStart = false;
 /**
@@ -647,6 +686,9 @@ function rebuildCourse() {
     // Drone faces local -Z; its horizontal facing follows from yaw alone.
     const forward = new THREE.Vector3(-Math.sin(drone.yaw), 0, -Math.cos(drone.yaw));
     course = new GateCourse(scene, difficulty.value, drone.position, forward);
+    // A fresh course means a fresh run: restart the countdown. Checkpoint
+    // respawns keep the same course object, so they never reach here.
+    gateTimeLeft = GATE_TIME_LIMIT;
   }
   gateHud.hidden = !course;
 }
@@ -707,6 +749,7 @@ function crash() {
 function resetDrone(autoStart = false) {
   drone.reset();
   input.reset();
+  resumeRun = false;
   flightState = 'ready';
   crashTimer = 0;
   crashCamOrigin = null;
@@ -726,6 +769,7 @@ function resetDrone(autoStart = false) {
 function startFlying() {
   if (flightState !== 'ready' || wizard.active || binder.active || !world.ready) return;
   readyOverlay.hidden = true;
+  resumeRun = false;
   pendingAutoStart = true;
 }
 
@@ -744,8 +788,63 @@ function attemptAutoArm() {
   pendingAutoStart = false;
   armBanner.hidden = true;
   flightState = 'flying';
-  rebuildCourse();
+  // A checkpoint resume keeps the live course (and its score/clock); only a
+  // fresh Start or full reset builds a new one.
+  if (resumeRun) resumeRun = false;
+  else rebuildCourse();
   syncOsdVisibility();
+}
+
+/**
+ * Resume a Gate Rush run from the last cleared checkpoint after a crash: the
+ * course, score, and countdown are all preserved, so only the drone is reset —
+ * to the checkpoint pose, then re-armed via the usual throttle-down check.
+ * Falls back to a full origin reset when there's no active course.
+ */
+function respawnAtCheckpoint() {
+  if (!course) {
+    resetDrone(true);
+    return;
+  }
+  const { pos, forward } = course.checkpoint;
+  // Set down on the ground beneath the checkpoint gate (roads are building-free
+  // corridors, so the spot is clear): respawning at the gate's altitude would
+  // just free-fall and crash again the moment the drone re-arms.
+  const ground = new THREE.Vector3(pos.x, DRONE_RADIUS, pos.z);
+  // Drone faces local -Z, so recover yaw from the checkpoint forward vector.
+  drone.respawn(ground, Math.atan2(-forward.x, -forward.z));
+  course.resumeFrom(ground);
+  resumeRun = true;
+  input.reset();
+  flightState = 'ready';
+  crashTimer = 0;
+  crashCamOrigin = null;
+  crashBanner.hidden = true;
+  armBanner.hidden = true;
+  pendingAutoStart = true;
+  readyOverlay.hidden = true;
+  syncOsdVisibility();
+}
+
+/** End the Gate Rush run when the clock expires and show the results screen. */
+function finishRun() {
+  flightState = 'results';
+  resultsScore.textContent = String(course ? course.score : 0);
+  resultsOverlay.hidden = false;
+  crashBanner.hidden = true;
+  armBanner.hidden = true;
+  pendingAutoStart = false;
+  syncOsdVisibility();
+}
+
+/**
+ * Format a duration as M:SS.
+ * @param {number} seconds Seconds remaining (clamped at 0).
+ * @returns {string}
+ */
+function formatTime(seconds) {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /* ─── Camera ──────────────────────────────────────────────────────── */
@@ -1017,6 +1116,10 @@ bindClear.addEventListener('click', () => {
 
 resetButton.addEventListener('click', () => resetDrone());
 startButton.addEventListener('click', startFlying);
+resultsAgain.addEventListener('click', () => {
+  resultsOverlay.hidden = true;
+  resetDrone();
+});
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetDrone();
   if (e.code === 'KeyC') {
@@ -1077,6 +1180,8 @@ function updateGateHud() {
   // the gate) when it lies straight ahead.
   gateArrow.style.transform = `rotate(${(((rel * 180) / Math.PI) - 90).toFixed(1)}deg)`;
   gateInfo.textContent = `GATES ${course.score} | ${target.distanceTo(drone.position).toFixed(0)} m`;
+  gateTimer.textContent = formatTime(gateTimeLeft);
+  gateTimer.classList.toggle('urgent', gateTimeLeft < 10);
 }
 
 let lastTime = performance.now();
@@ -1092,7 +1197,11 @@ function animate(now) {
 
   if (flightState === 'crashed') {
     crashTimer -= dt;
-    if (crashTimer <= 0) resetDrone(true);
+    // In Gate Rush, resume from the last checkpoint (keeping score and clock);
+    // respawnAtCheckpoint falls back to a full reset when there's no course.
+    if (crashTimer <= 0) respawnAtCheckpoint();
+  } else if (flightState === 'results') {
+    // Frozen scene behind the results overlay; wait for Play Again.
   } else if (flightState === 'ready') {
     // Physics paused: just mirror stick input so the controller can be verified.
     const controls = input.poll(dt);
@@ -1117,14 +1226,21 @@ function animate(now) {
     if (!godMode && world.collides(drone.position, DRONE_RADIUS)) crash();
 
     if (course && flightState === 'flying') {
-      const gateEvent = course.update(drone.position, dt);
-      if (gateEvent) {
-        // Restart the CSS animation even if the previous flash is mid-run.
-        passFlash.className = '';
-        void passFlash.offsetWidth;
-        passFlash.classList.add(gateEvent);
+      // The clock starts only after the first gate is cleared.
+      if (course.score >= 1) gateTimeLeft -= dt;
+      if (gateTimeLeft <= 0) {
+        gateTimeLeft = 0;
+        finishRun();
+      } else {
+        const gateEvent = course.update(drone.position, dt);
+        if (gateEvent) {
+          // Restart the CSS animation even if the previous flash is mid-run.
+          passFlash.className = '';
+          void passFlash.offsetWidth;
+          passFlash.classList.add(gateEvent);
+        }
+        updateGateHud();
       }
-      updateGateHud();
     }
 
     if (!osd.hidden) updateOsd();

@@ -211,6 +211,22 @@ export class Drone {
     this.syncMesh();
   }
 
+  /**
+   * Respawn at an arbitrary pose with zeroed motion, for checkpoint restarts
+   * (unlike {@link reset}, which always returns to the origin spawn pad).
+   * @param {THREE.Vector3} position World-space respawn point.
+   * @param {number} yaw Heading in radians (drone faces local -Z).
+   */
+  respawn(position, yaw) {
+    this.position.copy(position);
+    this.velocity.set(0, 0, 0);
+    this.yaw = yaw;
+    this.pitch = 0;
+    this.roll = 0;
+    this.throttle = 0;
+    this.syncMesh();
+  }
+
   /** @returns {number} Ground speed in m/s. */
   speed() {
     return this.velocity.length();
