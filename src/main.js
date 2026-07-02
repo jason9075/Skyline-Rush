@@ -91,6 +91,8 @@ style.textContent = `
     background: var(--me-light); color: var(--me-dark);
     padding: 0.5rem 0.6rem; cursor: pointer;
   }
+  .modal-body input[type="range"] { accent-color: var(--me-red); cursor: pointer; }
+  #camera-pitch-value { color: var(--me-dark); font-family: monospace; }
   .modal-body .toggle-label { margin-top: 0.4rem; }
   /* Above the ready/calibration overlays (40/45) so the sticks stay visible
      for verifying the RC controller before starting. */
@@ -212,6 +214,8 @@ const gateHud = document.getElementById('gate-hud');
 const gateArrow = document.getElementById('gate-arrow');
 const gateInfo = document.getElementById('gate-info');
 const cameraMode = document.getElementById('camera-mode');
+const cameraPitch = document.getElementById('camera-pitch');
+const cameraPitchValue = document.getElementById('camera-pitch-value');
 const channelMap = document.getElementById('channel-map');
 const resetButton = document.getElementById('reset-button');
 const gamepadStatus = document.getElementById('gamepad-status');
@@ -417,6 +421,20 @@ function startFlying() {
 /* ─── Camera ──────────────────────────────────────────────────────── */
 const cameraTarget = new THREE.Vector3();
 
+// FPV camera uptilt, like the fixed camera angle on a real FPV quad.
+// Precomputed as a quaternion so the frame loop just multiplies.
+const fpvTilt = new THREE.Quaternion();
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+
+/** Refresh the FPV tilt quaternion and its label from the settings slider. */
+function syncCameraPitch() {
+  const deg = Number(cameraPitch.value);
+  cameraPitchValue.textContent = `${deg}°`;
+  fpvTilt.setFromAxisAngle(X_AXIS, THREE.MathUtils.degToRad(deg));
+}
+cameraPitch.addEventListener('input', syncCameraPitch);
+syncCameraPitch();
+
 const CRASH_CAM_PULLBACK = new THREE.Vector3(0, 1.5, 4);
 const crashCamTargetPos = new THREE.Vector3();
 const crashCamMatrix = new THREE.Matrix4();
@@ -449,8 +467,9 @@ function updateCamera() {
   drone.mesh.visible = mode !== 'fpv';
   if (mode === 'fpv') {
     camera.position.copy(drone.position);
-    // Camera and drone both face their local -Z, so the orientations match 1:1.
-    camera.quaternion.copy(drone.mesh.quaternion);
+    // Camera and drone both face their local -Z, so the orientations match
+    // 1:1; the configured uptilt is then applied in the drone's local frame.
+    camera.quaternion.copy(drone.mesh.quaternion).multiply(fpvTilt);
     return;
   }
   if (mode === 'top') {
