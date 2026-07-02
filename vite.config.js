@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: process.env.NODE_ENV === 'production' ? '/drone-control/' : '/',
+  base: process.env.NODE_ENV === 'production' ? '/Skyline-Rush/' : '/',
   server: {
     port: 8080,
   },
