@@ -79,8 +79,8 @@ export class TouchControls {
         border: 1px solid var(--me-gray); background: rgba(255, 255, 255, 0.35);
         backdrop-filter: blur(2px);
       }
-      #touch-controls .touch-pad.left { left: 4vw; }
-      #touch-controls .touch-pad.right { right: 4vw; }
+      #touch-controls .touch-pad.left { left: calc(4vw + env(safe-area-inset-left, 0px)); }
+      #touch-controls .touch-pad.right { right: calc(4vw + env(safe-area-inset-right, 0px)); }
       #touch-controls .touch-knob {
         position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
         border-radius: 50%; background: var(--me-red);
@@ -113,9 +113,17 @@ export class TouchControls {
    */
   bindPad(pad, isLeft) {
     const down = (e) => {
-      if (pad.pointerId !== null) return;
+      // iOS can swallow the matching pointerup/pointercancel when a system
+      // edge-gesture steals the touch (the left pad sits by iOS's back-swipe
+      // edge, so it hits this worst), leaving pointerId set and the pad dead.
+      // Releasing any stale pointer here re-arms the pad on the next touch.
+      if (pad.pointerId !== null) this.release(pad, isLeft);
       pad.pointerId = e.pointerId;
-      pad.root.setPointerCapture(e.pointerId);
+      try {
+        pad.root.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer already gone — capture not essential */
+      }
       this.active = true;
       this.moveTo(pad, isLeft, e);
       e.preventDefault();
@@ -136,6 +144,8 @@ export class TouchControls {
     pad.root.addEventListener('pointermove', move);
     pad.root.addEventListener('pointerup', up);
     pad.root.addEventListener('pointercancel', up);
+    // The OS can revoke pointer capture without a pointerup/cancel; recover.
+    pad.root.addEventListener('lostpointercapture', up);
   }
 
   /**
