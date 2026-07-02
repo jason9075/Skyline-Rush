@@ -3,6 +3,7 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 import hdrSkyUrl from '../assets/kloofendal_48d_partly_cloudy_puresky_1k.hdr?url';
 import { loadBuildingPool } from './buildings.js';
+import { AxisBinder } from './axisbind.js';
 import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
@@ -310,6 +311,20 @@ style.textContent = `
   }
   #calib-next:hover { background: var(--me-red-dark); }
   #calib-next[hidden] { display: none; }
+  #binding-overlay {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
+  }
+  #binding-overlay[hidden] { display: none; }
+  #bind-instruction { min-height: 3em; }
+  #bind-status { color: var(--me-orange); font-size: 0.8rem; min-height: 1.4em; font-weight: 700; }
+  #bind-next {
+    cursor: pointer; padding: 0.5rem 1.4rem; border-radius: 2px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
+  }
+  #bind-next:hover { background: var(--me-red-dark); }
+  #bind-next[hidden] { display: none; }
   /* Touch devices drive the on-screen pads, so the desktop stick HUD and
      keyboard hints are redundant — hide them to keep the view clear. */
   body.touch #hud, body.touch #info { display: none; }
@@ -365,6 +380,7 @@ const readyTutorial = document.getElementById('ready-tutorial');
 const startButton = document.getElementById('start-button');
 const loadingText = document.getElementById('loading-text');
 const calibrateButton = document.getElementById('calibrate-button');
+const bindButton = document.getElementById('bind-button');
 const ratesButton = document.getElementById('rates-button');
 const ratesOverlay = document.getElementById('rates-overlay');
 const ratesDone = document.getElementById('rates-done');
@@ -381,6 +397,12 @@ const calibStatus = document.getElementById('calib-status');
 const calibNext = document.getElementById('calib-next');
 const calibCancel = document.getElementById('calib-cancel');
 const calibClear = document.getElementById('calib-clear');
+const bindingOverlay = document.getElementById('binding-overlay');
+const bindInstruction = document.getElementById('bind-instruction');
+const bindStatus = document.getElementById('bind-status');
+const bindNext = document.getElementById('bind-next');
+const bindCancel = document.getElementById('bind-cancel');
+const bindClear = document.getElementById('bind-clear');
 
 /* ─── Three.js scene ──────────────────────────────────────────────── */
 // Touch devices are treated as mobile: shadows are disabled and the pixel
@@ -527,6 +549,9 @@ function updateTutorial() {
   // Calibration only applies to a physical gamepad.
   calibrateButton.hidden = source !== 'gamepad';
   calibrationStatus.hidden = source !== 'gamepad';
+  // Multi-device binding is for physical controller rigs, not the touch pads.
+  bindButton.hidden = isTouch;
+  bindButton.textContent = input.hasBindings() ? 'Re-bind Axes (Multi-Device)' : 'Bind Axes (Multi-Device)';
 }
 
 /** Push the selected device value into the input manager and refresh the UI. */
@@ -578,6 +603,17 @@ const wizard = new CalibrationWizard(
     nextButton: calibNext,
   },
   syncCalibrationUi
+);
+
+const binder = new AxisBinder(
+  input,
+  {
+    overlay: bindingOverlay,
+    instruction: bindInstruction,
+    status: bindStatus,
+    nextButton: bindNext,
+  },
+  updateTutorial
 );
 
 /* ─── State ───────────────────────────────────────────────────────── */
@@ -688,7 +724,7 @@ function resetDrone(autoStart = false) {
  * always closes the overlay, and flight begins once the stick is confirmed low.
  */
 function startFlying() {
-  if (flightState !== 'ready' || wizard.active || !world.ready) return;
+  if (flightState !== 'ready' || wizard.active || binder.active || !world.ready) return;
   readyOverlay.hidden = true;
   pendingAutoStart = true;
 }
@@ -700,8 +736,8 @@ function startFlying() {
  * unexpectedly — showing a reminder banner until the stick is lowered.
  */
 function attemptAutoArm() {
-  if (!pendingAutoStart || flightState !== 'ready' || wizard.active || !world.ready) return;
-  if ((input.activeGamepad() || input.touchActive()) && input.poll(0).throttle > 0.1) {
+  if (!pendingAutoStart || flightState !== 'ready' || wizard.active || binder.active || !world.ready) return;
+  if ((input.hasBindings() || input.activeGamepad() || input.touchActive()) && input.poll(0).throttle > 0.1) {
     armBanner.hidden = false;
     return;
   }
@@ -971,6 +1007,14 @@ calibClear.addEventListener('click', () => {
   wizard.cancel();
 });
 
+bindButton.addEventListener('click', () => binder.start());
+bindNext.addEventListener('click', () => binder.next());
+bindCancel.addEventListener('click', () => binder.cancel());
+bindClear.addEventListener('click', () => {
+  input.clearBindings();
+  binder.cancel();
+});
+
 resetButton.addEventListener('click', () => resetDrone());
 startButton.addEventListener('click', startFlying);
 window.addEventListener('keydown', (e) => {
@@ -1044,6 +1088,7 @@ function animate(now) {
   lastTime = now;
 
   wizard.update(dt);
+  binder.update(dt);
 
   if (flightState === 'crashed') {
     crashTimer -= dt;

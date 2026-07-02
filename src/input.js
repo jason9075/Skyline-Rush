@@ -25,6 +25,8 @@ const CHANNEL_MAPS = {
 
 /** localStorage key for persisted calibration data. */
 const CALIBRATION_KEY = 'drone-control.calibration';
+/** localStorage key for persisted multi-device axis bindings. */
+const BINDINGS_KEY = 'drone-control.bindings';
 
 /**
  * @typedef {Object} AxisRange
@@ -92,6 +94,12 @@ export class InputManager {
     /** @type {Calibration | null} */
     this.calibration = InputManager.loadCalibration();
     if (this.calibration) this.channelMap = 'CUSTOM';
+    /**
+     * DCS-style per-axis, cross-device bindings; take priority over the single
+     * gamepad path when complete. See {@link import('./axisbind.js').AxisBinder}.
+     * @type {Record<string, import('./axisbind.js').AxisBinding> | null}
+     */
+    this.bindings = InputManager.loadBindings();
     /**
      * User-chosen gamepad index; null selects the first connected pad (auto).
      * @type {number | null}
@@ -193,6 +201,10 @@ export class InputManager {
    * @returns {ControlInput}
    */
   pollRaw(dt) {
+    // DCS-style multi-device bindings win when complete (and not overridden by
+    // an explicit keyboard selection): they read each channel from its own
+    // device, so split HOTAS / dual-stick rigs bypass the single-pad path.
+    if (!this.forceKeyboard && this.hasBindings()) return this.pollBindings();
     const pad = this.activeGamepad();
     if (pad && pad.axes.length >= 4) {
       if (this.channelMap === 'CUSTOM' && this.calibration) {
@@ -292,6 +304,88 @@ export class InputManager {
   rawAxes() {
     const pad = this.activeGamepad();
     return pad ? Array.from(pad.axes) : [];
+  }
+
+  /** True when a complete set of multi-device axis bindings is active. */
+  hasBindings() {
+    const b = this.bindings;
+    return Boolean(b && b.throttle && b.yaw && b.pitch && b.roll);
+  }
+
+  /**
+   * Re-resolve a bound device: prefer the recorded index when its id still
+   * matches, else the first connected pad sharing the id (survives index
+   * shuffling on reconnect).
+   * @param {(Gamepad | null)[]} pads Snapshot from navigator.getGamepads().
+   * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
+   * @returns {Gamepad | null}
+   */
+  resolvePad(pads, bind) {
+    const byIndex = pads[bind.index];
+    if (byIndex && byIndex.id === bind.id) return byIndex;
+    return Array.from(pads).find((p) => p && p.id === bind.id) || byIndex || null;
+  }
+
+  /**
+   * Read each channel from its own bound (device, axis), applying the captured
+   * direction. Centered channels are deadband-shaped; throttle maps [-1,1]→[0,1].
+   * @returns {ControlInput}
+   */
+  pollBindings() {
+    this.setStatus('Input: custom axis bindings');
+    const pads = navigator.getGamepads();
+    /**
+     * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
+     * @returns {number}
+     */
+    const read = (bind) => {
+      const pad = this.resolvePad(pads, bind);
+      if (!pad || pad.axes[bind.axis] === undefined) return 0;
+      return pad.axes[bind.axis] * bind.sign;
+    };
+    const b = this.bindings;
+    return {
+      throttle: Math.max(0, Math.min(1, (read(b.throttle) + 1) / 2)),
+      yaw: shapeAxis(read(b.yaw)),
+      pitch: shapeAxis(read(b.pitch)),
+      roll: shapeAxis(read(b.roll)),
+    };
+  }
+
+  /**
+   * Persist and activate multi-device axis bindings.
+   * @param {Record<string, import('./axisbind.js').AxisBinding>} bindings Binder result.
+   */
+  setBindings(bindings) {
+    this.bindings = bindings;
+    try {
+      localStorage.setItem(BINDINGS_KEY, JSON.stringify(bindings));
+    } catch (err) {
+      console.warn('Failed to persist bindings:', err);
+    }
+  }
+
+  /** Remove saved axis bindings, reverting to the single-device path. */
+  clearBindings() {
+    this.bindings = null;
+    localStorage.removeItem(BINDINGS_KEY);
+  }
+
+  /**
+   * Load previously saved axis bindings, if a complete set exists.
+   * @returns {Record<string, import('./axisbind.js').AxisBinding> | null}
+   */
+  static loadBindings() {
+    try {
+      const raw = localStorage.getItem(BINDINGS_KEY);
+      if (!raw) return null;
+      const b = JSON.parse(raw);
+      if (!b || !b.throttle || !b.yaw || !b.pitch || !b.roll) return null;
+      return b;
+    } catch (err) {
+      console.warn('Failed to load bindings:', err);
+      return null;
+    }
   }
 
   /**

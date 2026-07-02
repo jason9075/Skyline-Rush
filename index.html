@@ -120,6 +120,7 @@
       <button id="start-button" type="button">Start Flying</button>
       <p class="ready-footnote">or press Space / Enter</p>
       <button id="calibrate-button" type="button" class="secondary-button">Calibrate Controller</button>
+      <button id="bind-button" type="button" class="secondary-button">Bind Axes (Multi-Device)</button>
       <button id="rates-button" type="button" class="secondary-button">Rates &amp; Expo</button>
       <p id="calibration-status" class="ready-footnote"></p>
     </div>
@@ -154,6 +155,20 @@
         <button id="calib-next" type="button">Next</button>
         <button id="calib-cancel" type="button" class="secondary-button">Cancel</button>
         <button id="calib-clear" type="button" class="secondary-button">Clear Saved</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="binding-overlay" hidden>
+    <div class="ready-panel">
+      <h1>Multi-Device Axis Binding</h1>
+      <p class="rates-hint">Bind each control to an axis on any device — for split HOTAS or dual-stick setups.</p>
+      <p id="bind-instruction"></p>
+      <p id="bind-status"></p>
+      <div class="calib-actions">
+        <button id="bind-next" type="button">Next</button>
+        <button id="bind-cancel" type="button" class="secondary-button">Cancel</button>
+        <button id="bind-clear" type="button" class="secondary-button">Clear Saved</button>
       </div>
     </div>
   </div>
