@@ -105,11 +105,21 @@ export class InputManager {
   }
 
   /**
-   * Read the active gamepad, if any.
+   * Read the active gamepad, if any. Falls back to scanning
+   * `navigator.getGamepads()` when no 'gamepadconnected' event has arrived
+   * yet — some browsers only fire that event after the very first button
+   * press or stick movement on the device, so a pad plugged in before the
+   * page (or before it's been touched) would otherwise never be picked up.
    * @returns {Gamepad | null}
    */
   activeGamepad() {
-    if (this.gamepadIndex === null) return null;
+    if (this.gamepadIndex === null) {
+      const pad = Array.from(navigator.getGamepads()).find((p) => p);
+      if (!pad) return null;
+      this.gamepadIndex = pad.index;
+      this.onStatusChange(`Gamepad: ${pad.id}`);
+      return pad;
+    }
     // getGamepads() must be re-polled every frame; state objects are snapshots.
     return navigator.getGamepads()[this.gamepadIndex] ?? null;
   }

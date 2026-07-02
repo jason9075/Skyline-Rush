@@ -1,10 +1,9 @@
 # drone-control
 
 A browser-based 3D drone flight simulator built with [Three.js](https://threejs.org/),
-styled after the Mirror's Edge palette — a white city under a bright sky, with
-signature red accents. Fly a quadcopter through an infinite procedurally
-generated field of box obstacles, using either a real RC transmitter
-(e.g. RadioMaster) over USB or the keyboard.
+with a white city under a bright sky and red accents. Fly a quadcopter through
+an infinite procedurally generated field of box obstacles, using either a real
+RC transmitter (e.g. RadioMaster) over USB or the keyboard.
 
 ## Features
 
