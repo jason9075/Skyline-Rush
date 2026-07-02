@@ -4,7 +4,9 @@
  * Renders one chunk's road field into an RGBA buffer at high resolution,
  * off the main thread. Detail features: signed-distance anti-aliased road
  * edges, sidewalk strips along roads, dashed centerline markings (including
- * around roundabout rings), and a subtle pavement dither.
+ * around roundabout rings), a fake curb bevel (a contact-shadow + rim-light
+ * pair straddling the road/sidewalk edge, since the ground is a flat plane
+ * with no real elevation change), and a subtle pavement dither.
  */
 
 import { sampleCityDetail } from './citygen.js';
@@ -24,6 +26,32 @@ const DASH_PERIOD = 6;
 const DASH_DUTY = 0.55;
 /** Dash half-width, meters. */
 const DASH_HALF = 0.22;
+
+/**
+ * Fake curb bevel: since the ground has no real elevation, a raised curb is
+ * faked with a dark contact-shadow strip on the road side of the edge and a
+ * light rim-highlight strip on the sidewalk side, both centered on `s.edge`
+ * (meters, signed distance to the road edge) and independent of light
+ * direction — this reads fine from any camera angle.
+ */
+const CURB_SHADOW_CENTER = -0.08;
+const CURB_SHADOW_HALF = 0.36;
+const CURB_SHADOW_STRENGTH = 0.6;
+const CURB_HILITE_CENTER = 0.18;
+const CURB_HILITE_HALF = 0.46;
+const CURB_HILITE_STRENGTH = 0.85;
+
+/**
+ * Smooth unit bump centered at `center`, reaching 0 past `half` away.
+ * @param {number} d Signed distance to evaluate.
+ * @param {number} center Bump center.
+ * @param {number} half Half-width (distance to falloff to 0).
+ * @returns {number} 0..1
+ */
+function bump(d, center, half) {
+  const t = 1 - clamp01(Math.abs(d - center) / half);
+  return t * t * (3 - 2 * t);
+}
 
 /**
  * Cheap deterministic per-cell dither in [-1, 1].
@@ -76,6 +104,13 @@ self.onmessage = (e) => {
         const road = s.major ? COL_MAJOR : COL_MINOR;
         const roadT = clamp01(s.edge / mpp + 0.5);
         rgb = mix(road, surface, roadT);
+
+        // Fake curb bevel: an AO shadow just inside the road, and a rim
+        // highlight just inside the sidewalk, straddling the edge.
+        const shadowAmt = bump(s.edge, CURB_SHADOW_CENTER, CURB_SHADOW_HALF) * CURB_SHADOW_STRENGTH;
+        rgb = [rgb[0] * (1 - shadowAmt), rgb[1] * (1 - shadowAmt), rgb[2] * (1 - shadowAmt)];
+        const hiliteAmt = bump(s.edge, CURB_HILITE_CENTER, CURB_HILITE_HALF) * CURB_HILITE_STRENGTH;
+        rgb = mix(rgb, [255, 255, 255], hiliteAmt);
 
         // Dashed centerline, only well inside the road and away from
         // intersections (crossEdge small means another road is crossing).
