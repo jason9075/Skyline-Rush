@@ -20,9 +20,16 @@ const YAW_RATE = 2.6;
 const DRAG = 0.4;
 /** How quickly the body eases toward the commanded tilt, 1/s. */
 const TILT_RESPONSE = 8;
+/** Pitch/roll rotation rate at full stick in acro mode, rad/s (~600°/s). */
+const ACRO_RATE = 10.5;
 
 /** Bounding sphere radius used for collision, meters. */
 export const DRONE_RADIUS = 0.45;
+
+/** Wrap an angle in radians to (-π, π], keeping it bounded over long flights. */
+function wrapAngle(a) {
+  return a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2));
+}
 
 /**
  * Build the visual quadcopter mesh (frame, four arms, rotors, canopy).
@@ -90,6 +97,8 @@ export class Drone {
     this.roll = 0;
     /** Last commanded throttle, kept for rotor spin animation. */
     this.throttle = 0;
+    /** @type {'level'|'acro'} 'level' self-levels to a max tilt; 'acro' commands raw rotation rates (flips/rolls). */
+    this.flightMode = 'level';
     this.syncMesh();
   }
 
@@ -101,13 +110,22 @@ export class Drone {
   update(input, dt) {
     this.throttle = input.throttle;
 
-    // Yaw is a rate command; pitch/roll are angle commands (angle mode).
+    // Yaw is always a rate command.
     this.yaw -= input.yaw * YAW_RATE * dt;
-    const targetPitch = -input.pitch * MAX_TILT;
-    const targetRoll = -input.roll * MAX_TILT;
-    const blend = Math.min(1, TILT_RESPONSE * dt);
-    this.pitch += (targetPitch - this.pitch) * blend;
-    this.roll += (targetRoll - this.roll) * blend;
+
+    if (this.flightMode === 'acro') {
+      // Rate mode: sticks command rotation rate directly, unclamped, so
+      // holding a stick over lets the airframe flip or roll continuously.
+      this.pitch = wrapAngle(this.pitch - input.pitch * ACRO_RATE * dt);
+      this.roll = wrapAngle(this.roll - input.roll * ACRO_RATE * dt);
+    } else {
+      // Angle mode: sticks command a self-leveling tilt clamped to MAX_TILT.
+      const targetPitch = -input.pitch * MAX_TILT;
+      const targetRoll = -input.roll * MAX_TILT;
+      const blend = Math.min(1, TILT_RESPONSE * dt);
+      this.pitch += (targetPitch - this.pitch) * blend;
+      this.roll += (targetRoll - this.roll) * blend;
+    }
 
     // Thrust acts along the body-up axis; gravity and drag oppose motion.
     const orientation = new THREE.Quaternion().setFromEuler(

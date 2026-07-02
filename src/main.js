@@ -225,6 +225,7 @@ const canvas = document.getElementById('canvas');
 const settingsButton = document.getElementById('settings-button');
 const settingsModal = document.getElementById('settings-modal');
 const settingsClose = document.getElementById('settings-close');
+const flightMode = document.getElementById('flight-mode');
 const gameMode = document.getElementById('game-mode');
 const difficulty = document.getElementById('difficulty');
 const difficultyLabel = document.getElementById('difficulty-label');
@@ -526,6 +527,10 @@ window.addEventListener('keydown', (e) => {
 
 channelMap.addEventListener('change', (e) => {
   input.channelMap = e.target.value;
+});
+
+flightMode.addEventListener('change', (e) => {
+  drone.flightMode = e.target.value;
 });
 
 gameMode.addEventListener('change', () => {
