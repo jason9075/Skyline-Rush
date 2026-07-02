@@ -31,7 +31,7 @@
         <label for="game-mode">Game Mode</label>
         <select id="game-mode">
           <option value="free">Free Flight</option>
-          <option value="gate">Gate Rush</option>
+          <option value="gate" selected>Gate Rush</option>
         </select>
         <label for="difficulty" id="difficulty-label" hidden>Difficulty</label>
         <select id="difficulty" hidden>
@@ -44,8 +44,8 @@
           <option value="fpv">FPV</option>
           <option value="top">Top</option>
         </select>
-        <label for="camera-pitch">FPV Camera Pitch <span id="camera-pitch-value">0°</span></label>
-        <input type="range" id="camera-pitch" min="-40" max="40" step="1" value="0" />
+        <label for="camera-pitch">Camera Tilt Angle <span id="camera-pitch-value">15°</span></label>
+        <input type="range" id="camera-pitch" min="-40" max="40" step="1" value="15" />
         <label for="channel-map">Channel Map</label>
         <select id="channel-map">
           <option value="AETR">AETR</option>
@@ -102,7 +102,7 @@
   <div id="pass-flash"></div>
 
   <div id="gate-hud" hidden>
-    <span id="gate-arrow">▲</span>
+    <span id="gate-arrow">➤</span>
     <span id="gate-info">GATES 0</span>
   </div>
 

@@ -7,6 +7,7 @@ import { CalibrationWizard } from './calibration.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
 import { expoCurve, InputManager } from './input.js';
+import { TouchControls } from './touch.js';
 import { World } from './world.js';
 
 /* ─── Mirror's Edge colour palette & layout ───────────────────────── */
@@ -299,6 +300,18 @@ style.textContent = `
   }
   #calib-next:hover { background: var(--me-red-dark); }
   #calib-next[hidden] { display: none; }
+  /* Touch devices drive the on-screen pads, so the desktop stick HUD and
+     keyboard hints are redundant — hide them to keep the view clear. */
+  body.touch #hud, body.touch #info { display: none; }
+  /* Move the SPD/ALT readout to the top-left on touch: its default bottom-right
+     spot sits under the right joystick pad. */
+  body.touch #osd-info {
+    right: auto; bottom: auto; left: 1rem; top: 1rem;
+    flex-direction: column; align-items: flex-start; gap: 0.5rem;
+  }
+  /* No gamepad on touch → calibration is meaningless; the Space/Enter and
+     calibration-status footnotes are keyboard/RC specific. */
+  body.touch #calibrate-button, body.touch .ready-footnote { display: none; }
 `;
 document.head.appendChild(style);
 
@@ -353,10 +366,14 @@ const calibCancel = document.getElementById('calib-cancel');
 const calibClear = document.getElementById('calib-clear');
 
 /* ─── Three.js scene ──────────────────────────────────────────────── */
+// Touch devices are treated as mobile: shadows are disabled and the pixel
+// ratio is capped, since a phone GPU can't afford both the shadow pass and a
+// 3× device-pixel-ratio framebuffer over the infinite city.
+const isTouch = TouchControls.isSupported();
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(isTouch ? Math.min(window.devicePixelRatio, 1.5) : window.devicePixelRatio);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = !isTouch;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
@@ -377,7 +394,7 @@ const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 500);
 // (see updateSun below) so the shadow frustum travels with the world.
 const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
 const sun = new THREE.DirectionalLight(0xFFFFFF, 1.8);
-sun.castShadow = true;
+sun.castShadow = !isTouch;
 sun.shadow.mapSize.set(2048, 2048);
 const SHADOW_HALF = 110;
 sun.shadow.camera.left = -SHADOW_HALF;
@@ -426,6 +443,28 @@ scene.add(drone.mesh);
 const input = new InputManager((status) => {
   gamepadStatus.textContent = status;
 });
+
+// On-screen dual joysticks for phones/tablets (Mode 2 layout). Only mounted on
+// touch devices, where it becomes the input source ahead of the keyboard.
+if (isTouch) {
+  document.body.classList.add('touch');
+  input.setTouchControls(new TouchControls());
+  const readyList = readyOverlay.querySelector('ul');
+  if (readyList) {
+    // Replace the RC/keyboard instructions with the on-screen stick tutorial.
+    readyList.innerHTML = '';
+    const steps = [
+      'Left stick — throttle (up / down) and yaw (turn). Throttle holds when you lift your thumb.',
+      'Right stick — pitch (forward / back) and roll (bank). Springs back to center.',
+      'Tap Start Flying, then race through the gates.',
+    ];
+    for (const text of steps) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      readyList.appendChild(li);
+    }
+  }
+}
 
 /* ─── Calibration wizard ──────────────────────────────────────────── */
 /** Sync the channel-map select and ready-screen status with input state. */
@@ -569,7 +608,7 @@ function startFlying() {
  */
 function attemptAutoArm() {
   if (!pendingAutoStart || flightState !== 'ready' || wizard.active || !world.ready) return;
-  if (input.activeGamepad() && input.poll(0).throttle > 0.1) {
+  if ((input.activeGamepad() || input.touchActive()) && input.poll(0).throttle > 0.1) {
     armBanner.hidden = false;
     return;
   }
@@ -891,7 +930,9 @@ function updateGateHud() {
   // Signed angle from camera forward to the gate (clockwise positive),
   // so the arrow points where the player must turn.
   const rel = Math.atan2(camDirTmp.x * dz - camDirTmp.z * dx, camDirTmp.x * dx + camDirTmp.z * dz);
-  gateArrow.style.transform = `rotate(${((rel * 180) / Math.PI).toFixed(1)}deg)`;
+  // The ➤ glyph points right, so offset by -90° to make it point up (toward
+  // the gate) when it lies straight ahead.
+  gateArrow.style.transform = `rotate(${(((rel * 180) / Math.PI) - 90).toFixed(1)}deg)`;
   gateInfo.textContent = `GATES ${course.score} | ${target.distanceTo(drone.position).toFixed(0)} m`;
 }
 

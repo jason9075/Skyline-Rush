@@ -94,6 +94,8 @@ export class InputManager {
     if (this.calibration) this.channelMap = 'CUSTOM';
     /** @type {number | null} */
     this.gamepadIndex = null;
+    /** @type {import('./touch.js').TouchControls | null} */
+    this.touch = null;
     /** @type {(status: string) => void} */
     this.onStatusChange = onStatusChange;
     /** @type {Set<string>} */
@@ -165,6 +167,16 @@ export class InputManager {
         // HID convention: pushing a stick forward reads negative — flip to "forward = +1".
         pitch: shapeAxis(-pad.axes[map.pitch]),
         roll: shapeAxis(pad.axes[map.roll]),
+      };
+    }
+    if (this.touch) {
+      // Once mounted (touch devices only), touch is the source even between
+      // taps, so the held throttle survives lifting a thumb.
+      return {
+        throttle: this.touch.throttle,
+        yaw: shapeAxis(this.touch.yaw),
+        pitch: shapeAxis(this.touch.pitch),
+        roll: shapeAxis(this.touch.roll),
       };
     }
     return this.pollKeyboard(dt);
@@ -281,8 +293,22 @@ export class InputManager {
     }
   }
 
-  /** Reset stateful keyboard throttle (e.g. after a crash). */
+  /**
+   * Attach on-screen touch joysticks as an input source (touch devices only).
+   * @param {import('./touch.js').TouchControls} touch Mounted touch controls.
+   */
+  setTouchControls(touch) {
+    this.touch = touch;
+  }
+
+  /** True while a touch joystick is currently under a finger. */
+  touchActive() {
+    return Boolean(this.touch && this.touch.active);
+  }
+
+  /** Reset stateful keyboard/touch throttle (e.g. after a crash). */
   reset() {
     this.keyboardThrottle = 0;
+    if (this.touch) this.touch.reset();
   }
 }
