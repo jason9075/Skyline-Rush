@@ -66,6 +66,17 @@ export function expoCurve(value, expo) {
   return value * (1 - expo) + value ** 3 * expo;
 }
 
+/**
+ * The connected gamepad with the given id, or null. Shared by the capture /
+ * calibrator helpers and the grid's live bars.
+ * @param {string} id Gamepad id.
+ * @param {(Gamepad | null)[]} [pads] Optional pre-fetched snapshot.
+ * @returns {Gamepad | null}
+ */
+export function padById(id, pads = navigator.getGamepads()) {
+  return Array.from(pads).find((p) => p && p.id === id) || null;
+}
+
 /** Polls gamepads and keyboard, exposing one normalized ControlInput per frame. */
 export class InputManager {
   /**

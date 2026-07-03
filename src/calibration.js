@@ -9,6 +9,8 @@
  * already span [-1, 1] don't need this.
  */
 
+import { padById } from './input.js';
+
 /** Calibrates the range of one axis on one device. */
 export class AxisCalibrator {
   constructor() {
@@ -46,7 +48,7 @@ export class AxisCalibrator {
 
   /** The device under calibration, re-resolved by id each frame. */
   pad() {
-    return Array.from(navigator.getGamepads()).find((p) => p && p.id === this.deviceId) || null;
+    return padById(this.deviceId);
   }
 
   /** Current raw value of the calibrated axis, or null if the device is gone. */

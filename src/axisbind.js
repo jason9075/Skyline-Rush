@@ -8,6 +8,8 @@
  * added later by the per-axis calibrator.
  */
 
+import { padById } from './input.js';
+
 /** Deviation from neutral (0..2) required to start capturing. */
 const CAPTURE_THRESHOLD = 0.5;
 /** Seconds the deflection must be held before it locks in. */
@@ -70,7 +72,7 @@ export class AxisCapture {
 
   /** The watched device, re-resolved by id each frame (indices can shift). */
   pad() {
-    return Array.from(navigator.getGamepads()).find((p) => p && p.id === this.deviceId) || null;
+    return padById(this.deviceId);
   }
 
   /**

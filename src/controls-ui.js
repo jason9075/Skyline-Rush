@@ -14,7 +14,7 @@
 
 import { AxisCapture } from './axisbind.js';
 import { AxisCalibrator } from './calibration.js';
-import { expoCurve } from './input.js';
+import { expoCurve, padById } from './input.js';
 import { PRESET_LIST, CHANNELS, defaultPresetFor } from './presets.js';
 
 /** Self-contained styles for the binding grid; reuses the global --me-* palette. */
@@ -81,6 +81,8 @@ style.textContent = `
   }
   .bind-empty-msg { grid-column: 1 / -1; padding: 1rem; text-align: center; color: var(--me-mid); }
   .ready-panel .secondary-button { width: min(320px, 100%); }
+  #input-status.warn { color: var(--me-red); font-weight: 700; }
+  .bind-rowlabel.warn { color: var(--me-red); }
 `;
 document.head.appendChild(style);
 
@@ -165,7 +167,10 @@ export class ControlsUI {
     this.capturingCell = null;
     /** @type {{channel: string, deviceId: string} | null} Cell being calibrated. */
     this.calibratingCell = null;
-    /** @type {Map<string, {fill: HTMLElement, id: string, axis: number}>} Live bars per channel. */
+    /**
+     * Live bars per channel.
+     * @type {Map<string, {fill: HTMLElement, rawVal: HTMLElement, calFill: HTMLElement|null, calVal: HTMLElement|null, channel: string, binding: import('./axisbind.js').AxisBinding}>}
+     */
     this.cellBars = new Map();
 
     this.input.onDevicesChange = () => {
@@ -225,9 +230,27 @@ export class ControlsUI {
     return !this.bindingOverlay.hidden;
   }
 
+  /** True while an axis capture or calibration is in progress. */
+  get busy() {
+    return this.capture.active || this.calibrator.active;
+  }
+
   /** No ready-screen preview needed; the grid shows its own live bars. */
   previewControls() {
     return null;
+  }
+
+  /**
+   * Channels with no binding while custom bindings are active — those axes read
+   * neutral and won't respond. Keyboard and the auto / out-of-box path are
+   * complete sets, so they report nothing.
+   * @returns {string[]}
+   */
+  missingChannels() {
+    if (this.input.forceKeyboard) return [];
+    const b = this.input.bindings;
+    if (!b) return [];
+    return CHANNELS.filter((c) => !b[c]);
   }
 
   /* ── Preset dropdown ─────────────────────────────────────────────── */
@@ -257,7 +280,12 @@ export class ControlsUI {
       this.preset = 'keyboard';
     } else {
       this.input.selectInput('auto');
-      this.input.applyPreset(v);
+      // No connected pad to apply onto: don't record the choice — it would
+      // mislead, since the device would fly the auto preset on connect, not this.
+      if (!this.input.applyPreset(v)) {
+        this.syncPresetUi();
+        return;
+      }
       this.preset = v;
     }
     this.onSettingsChange();
@@ -273,13 +301,21 @@ export class ControlsUI {
     setSelect(this.presetSelect, shown);
 
     const label = (id) => PRESET_LIST.find((p) => p.id === id)?.label ?? id;
-    let status;
-    if (this.input.forceKeyboard) status = 'Keyboard controls active.';
-    else if (this.preset === 'custom') status = 'Custom axis bindings — open Advanced Binding to edit.';
-    else if (this.preset) status = `Preset: ${label(this.preset)}.`;
-    else if (pad) status = `Auto preset: ${label(defaultPresetFor(pad))} — pick one or bind to customize.`;
-    else status = 'No controller detected — keyboard fallback active.';
-    this.inputStatus.textContent = status;
+    const missing = this.missingChannels();
+    if (missing.length) {
+      this.inputStatus.textContent =
+        `⚠ ${missing.map((c) => CHANNEL_LABELS[c]).join(', ')} unbound — won't respond. Pick a preset or bind them.`;
+      this.inputStatus.classList.add('warn');
+    } else {
+      let status;
+      if (this.input.forceKeyboard) status = 'Keyboard controls active.';
+      else if (this.preset === 'custom') status = 'Custom axis bindings — open Custom Binding to edit.';
+      else if (this.preset) status = `Preset: ${label(this.preset)}.`;
+      else if (pad) status = `Auto preset: ${label(defaultPresetFor(pad))} — pick one or bind to customize.`;
+      else status = 'No controller detected — keyboard fallback active.';
+      this.inputStatus.textContent = status;
+      this.inputStatus.classList.remove('warn');
+    }
 
     this.updateTutorial();
   }
@@ -379,7 +415,7 @@ export class ControlsUI {
    * @returns {HTMLElement}
    */
   buildMoveAll(device) {
-    const busy = this.capture.active || this.calibrator.active;
+    const busy = this.busy;
     const connected = this.input.listGamepads();
     const move = document.createElement('select');
     move.className = 'cell-move';
@@ -449,7 +485,7 @@ export class ControlsUI {
       cell.textContent = '—';
       return cell;
     }
-    const busy = this.capture.active || this.calibrator.active;
+    const busy = this.busy;
     cell.classList.add('bound');
 
     const axisLabel = document.createElement('span');
@@ -503,12 +539,19 @@ export class ControlsUI {
     grid.appendChild(corner);
     for (const d of devices) grid.appendChild(this.renderDeviceHead(d));
 
+    const missing = this.missingChannels();
     for (const channel of CHANNELS) {
       const rowLabel = document.createElement('div');
-      rowLabel.className = 'bind-rowlabel';
+      rowLabel.className = missing.includes(channel) ? 'bind-rowlabel warn' : 'bind-rowlabel';
       rowLabel.textContent = CHANNEL_LABELS[channel];
       grid.appendChild(rowLabel);
       for (const d of devices) grid.appendChild(this.renderCell(channel, d, bindings[channel]));
+    }
+    // Don't clobber an in-progress capture / calibration message.
+    if (!this.busy) {
+      this.bindStatus.textContent = missing.length
+        ? `⚠ ${missing.map((c) => CHANNEL_LABELS[c]).join(', ')} unbound — those axes won't respond.`
+        : '';
     }
   }
 
@@ -527,7 +570,7 @@ export class ControlsUI {
     cell.className = 'bind-cell';
     const capturing = this.capturingCell?.channel === channel && this.capturingCell?.deviceId === device.id;
     const calibrating = this.calibratingCell?.channel === channel && this.calibratingCell?.deviceId === device.id;
-    const busy = this.capture.active || this.calibrator.active;
+    const busy = this.busy;
 
     if (capturing) {
       cell.className = 'bind-cell active';
@@ -629,7 +672,7 @@ export class ControlsUI {
    * @param {string} deviceId Target device id.
    */
   beginCapture(channel, deviceId) {
-    if (this.capture.active || this.calibrator.active) return;
+    if (this.busy) return;
     this.capturingCell = { channel, deviceId };
     this.bindStatus.textContent = `Binding ${CHANNEL_LABELS[channel]} — move the axis and hold.`;
     this.capture.start(
@@ -665,7 +708,7 @@ export class ControlsUI {
    * @param {string} channel Control channel.
    */
   clearCell(channel) {
-    if (this.capture.active || this.calibrator.active) return;
+    if (this.busy) return;
     const base = { ...this.currentBindings() };
     delete base[channel];
     // Keep the explicit set (empty {} included) so cleared cells stay cleared
@@ -682,7 +725,7 @@ export class ControlsUI {
    * @param {import('./axisbind.js').AxisBinding} binding Cell binding.
    */
   beginCalibration(channel, deviceId, binding) {
-    if (this.capture.active || this.calibrator.active) return;
+    if (this.busy) return;
     this.calibratingCell = { channel, deviceId };
     this.bindStatus.textContent =
       `Calibrating ${CHANNEL_LABELS[channel]} — sweep the axis through its full range, leave it at rest, then Finish.`;
@@ -718,7 +761,7 @@ export class ControlsUI {
     if (this.cellBars.size === 0) return;
     const pads = navigator.getGamepads();
     for (const { fill, rawVal, calFill, calVal, channel, binding } of this.cellBars.values()) {
-      const pad = Array.from(pads).find((p) => p && p.id === binding.id);
+      const pad = padById(binding.id, pads);
       const rawV = pad && pad.axes[binding.axis] !== undefined ? pad.axes[binding.axis] : 0;
       fill.style.width = `${((Math.max(-1, Math.min(1, rawV)) + 1) / 2) * 100}%`;
       if (rawVal) rawVal.textContent = rawV.toFixed(2);

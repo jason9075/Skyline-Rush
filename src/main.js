@@ -34,8 +34,8 @@ style.textContent = `
   }
   #info::before { content: ''; display: inline-block; width: 0.6em; height: 0.6em;
     background: var(--me-red); margin-right: 0.5em; }
-  /* Topmost layer (above the ready/calibration overlays at 40/45 and the
-     HUD at 46) so settings stay adjustable on the start screen. */
+  /* Topmost layer (above the ready overlay at 40, the binding/rates overlays
+     at 45, and the HUD at 46) so settings stay adjustable on the start screen. */
   #toolbar {
     position: fixed; top: 1rem; right: 1rem;
     display: flex; gap: 0.5rem; align-items: center;
@@ -96,8 +96,8 @@ style.textContent = `
   .modal-body input[type="range"] { accent-color: var(--me-red); cursor: pointer; }
   #camera-pitch-value { color: var(--me-dark); font-family: monospace; }
   .modal-body .toggle-label { margin-top: 0.4rem; }
-  /* Above the ready/calibration overlays (40/45) so the sticks stay visible
-     for verifying the RC controller before starting. */
+  /* Above the ready and binding/rates overlays (40/45) so the sticks stay
+     visible for verifying the controller before starting. */
   #hud {
     position: fixed; bottom: 1rem; left: 1rem; z-index: 46;
     display: grid; gap: 0.5rem; font-size: 0.8rem;
@@ -341,11 +341,6 @@ style.textContent = `
     border: 1px solid var(--me-gray); background: var(--me-panel); color: var(--me-dark);
   }
   .secondary-button:hover { border-color: var(--me-red); color: var(--me-red); }
-  #calibration-overlay {
-    position: fixed; inset: 0; display: grid; place-items: center;
-    background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
-  }
-  #calibration-overlay[hidden] { display: none; }
   #rates-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
@@ -374,31 +369,8 @@ style.textContent = `
     border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
   }
   #rates-done:hover { background: var(--me-red-dark); }
-  #calib-instruction { min-height: 3em; }
-  #calib-status { color: var(--me-orange); font-size: 0.8rem; min-height: 1.2em; font-weight: 700; }
-  #calib-axes { display: grid; gap: 0.35rem; }
-  .calib-axis {
-    display: grid; grid-template-columns: 2.2rem 1fr; align-items: center;
-    gap: 0.5rem; font-size: 0.75rem; color: var(--me-mid); font-family: monospace;
-  }
-  .calib-track {
-    height: 10px; border: 1px solid var(--me-gray); border-radius: 2px;
-    background: var(--me-light); overflow: hidden;
-  }
-  .calib-fill {
-    height: 100%; width: 50%; background: var(--me-blue);
-    transition: width 0.05s linear;
-  }
-  .calib-fill.assigned { background: var(--me-red); }
   .calib-actions { display: flex; gap: 0.5rem; justify-content: center; }
   .calib-actions button { font: inherit; }
-  #calib-next {
-    cursor: pointer; padding: 0.5rem 1.4rem; border-radius: 2px;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
-  }
-  #calib-next:hover { background: var(--me-red-dark); }
-  #calib-next[hidden] { display: none; }
   #binding-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
@@ -426,9 +398,7 @@ style.textContent = `
     right: auto; bottom: auto; left: 1rem; top: 1rem;
     flex-direction: column; align-items: flex-start; gap: 0.5rem;
   }
-  /* The Space/Enter footnote is keyboard-specific; hide it on touch. The
-     calibrate button and calibration-status footnote are toggled per input
-     source in ControlsUI.updateTutorial(). */
+  /* The Space/Enter footnote is keyboard-specific; hide it on touch. */
   body.touch .ready-footnote { display: none; }
 `;
 document.head.appendChild(style);
@@ -1114,8 +1084,9 @@ function animate(now) {
     // Frozen scene behind the results overlay; wait for Play Again.
   } else if (flightState === 'ready') {
     // Physics paused: just mirror stick input so the controller can be verified.
-    // While calibrating, preview the in-progress calibration (not the still-active
-    // old channel map) so the sticks reflect what Save & Finish will commit.
+    // previewControls() is a hook for showing an in-progress config on the ready
+    // sticks; it currently returns null (the binding grid has its own bars), so
+    // this reads the live poll.
     const controls = controlsUi.previewControls() ?? input.poll(dt);
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
