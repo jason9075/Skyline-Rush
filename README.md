@@ -10,6 +10,15 @@ an infinite procedurally generated city, using either a real RC transmitter
 - **Angle-mode flight physics** — sticks command tilt angles; thrust, gravity,
   and linear drag are integrated with semi-implicit Euler. Hover sits near 40%
   throttle (thrust-to-weight ratio ≈ 2.5).
+  > **Known limitation (acro mode):** attitude is stored as three Euler angles
+  > (`pitch`/`yaw`/`roll`, order `YXZ`) and rate commands are integrated
+  > directly onto those components (`drone.js`). Because `YXZ` expands to
+  > `Ry(yaw)·Rx(pitch)·Rz(roll)`, pitch sits *outside* roll in the product, so
+  > once roll accumulates to ~180° the pitch axis no longer matches the body's
+  > pitch axis and **pitch input reverses** (with gimbal coupling into yaw near
+  > 90°). Integrating body-frame angular rates onto fixed Euler components is
+  > only valid while the other two angles stay near zero; proper acro/freestyle
+  > flight needs quaternion integration of body-frame angular velocity.
 - **Game controller support via the Gamepad API** — a **Control Preset**
   dropdown maps a standard gamepad (Xbox) or a RadioMaster (EdgeTX, AETR/TAER)
   in one click; plug in and fly.

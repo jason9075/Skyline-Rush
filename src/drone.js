@@ -26,11 +26,6 @@ const ACRO_RATE = 10.5;
 /** Bounding sphere radius used for collision, meters. */
 export const DRONE_RADIUS = 0.45;
 
-/** Wrap an angle in radians to (-π, π], keeping it bounded over long flights. */
-function wrapAngle(a) {
-  return a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2));
-}
-
 /**
  * Build the visual quadcopter mesh: a twin-plate carbon frame with an FPV
  * camera pod, metallic motors, and true 2-blade propellers. The solid blades
@@ -130,6 +125,17 @@ export class Drone {
     this.position = spawnPosition.clone();
     /** @type {THREE.Vector3} */
     this.velocity = new THREE.Vector3();
+    /**
+     * Body orientation and single source of truth for attitude. Acro integrates
+     * body-frame angular velocity onto it; level rebuilds it from a heading +
+     * clamped tilt setpoint. {@link Drone#pitch}/{@link Drone#yaw}/
+     * {@link Drone#roll} are derived from it each frame for the HUD/camera.
+     * @type {THREE.Quaternion}
+     */
+    this.orientation = new THREE.Quaternion();
+    /** Heading setpoint for level mode (yaw is a rate integrated onto this). */
+    this.heading = 0;
+    // Read-only Euler view of `orientation` (order YXZ), refreshed each update.
     this.yaw = 0;
     this.pitch = 0;
     this.roll = 0;
@@ -137,6 +143,8 @@ export class Drone {
     this.throttle = 0;
     /** @type {'level'|'acro'} 'level' self-levels to a max tilt; 'acro' commands raw rotation rates (flips/rolls). */
     this.flightMode = 'level';
+    /** Previous mode, to seed the heading setpoint when switching into level. */
+    this._prevMode = this.flightMode;
     this.syncMesh();
   }
 
@@ -148,29 +156,54 @@ export class Drone {
   update(input, dt) {
     this.throttle = input.throttle;
 
-    // Yaw is always a rate command.
-    this.yaw -= input.yaw * YAW_RATE * dt;
-
-    if (this.flightMode === 'acro') {
-      // Rate mode: sticks command rotation rate directly, unclamped, so
-      // holding a stick over lets the airframe flip or roll continuously.
-      this.pitch = wrapAngle(this.pitch - input.pitch * ACRO_RATE * dt);
-      this.roll = wrapAngle(this.roll - input.roll * ACRO_RATE * dt);
-    } else {
-      // Angle mode: sticks command a self-leveling tilt clamped to MAX_TILT.
-      const targetPitch = -input.pitch * MAX_TILT;
-      const targetRoll = -input.roll * MAX_TILT;
-      const blend = Math.min(1, TILT_RESPONSE * dt);
-      this.pitch += (targetPitch - this.pitch) * blend;
-      this.roll += (targetRoll - this.roll) * blend;
+    // Entering level from acro: seed the heading setpoint from the current
+    // actual heading so self-leveling doesn't snap the yaw. (Tilt continuity is
+    // automatic — the level branch reads current tilt back off `orientation`.)
+    if (this.flightMode !== this._prevMode) {
+      if (this.flightMode === 'level') {
+        this.heading = new THREE.Euler().setFromQuaternion(this.orientation, 'YXZ').y;
+      }
+      this._prevMode = this.flightMode;
     }
 
+    if (this.flightMode === 'acro') {
+      // Rate mode: integrate body-frame angular velocity onto the orientation
+      // quaternion (right-multiply = local frame). Unlike accumulating Euler
+      // components, this stays correct through full flips and rolls — no gimbal
+      // coupling that would reverse pitch after a 180° roll.
+      const omega = new THREE.Vector3(
+        -input.pitch * ACRO_RATE,
+        -input.yaw * YAW_RATE,
+        -input.roll * ACRO_RATE,
+      ).multiplyScalar(dt);
+      const angle = omega.length();
+      if (angle > 1e-8) {
+        this.orientation
+          .multiply(new THREE.Quaternion().setFromAxisAngle(omega.divideScalar(angle), angle))
+          .normalize();
+      }
+    } else {
+      // Angle mode: yaw is a full-rate heading command; pitch/roll ease toward a
+      // tilt clamped to MAX_TILT. Reading current tilt back off `orientation`
+      // keeps the self-leveling dynamics identical to the old Euler model while
+      // the quaternion stays the single source of truth.
+      this.heading -= input.yaw * YAW_RATE * dt;
+      const cur = new THREE.Euler().setFromQuaternion(this.orientation, 'YXZ');
+      const blend = Math.min(1, TILT_RESPONSE * dt);
+      const pitch = cur.x + (-input.pitch * MAX_TILT - cur.x) * blend;
+      const roll = cur.z + (-input.roll * MAX_TILT - cur.z) * blend;
+      this.orientation.setFromEuler(new THREE.Euler(pitch, this.heading, roll, 'YXZ'));
+    }
+
+    // Derived read-only Euler view (order YXZ) for the HUD/camera in main.js.
+    const e = new THREE.Euler().setFromQuaternion(this.orientation, 'YXZ');
+    this.pitch = e.x;
+    this.yaw = e.y;
+    this.roll = e.z;
+
     // Thrust acts along the body-up axis; gravity and drag oppose motion.
-    const orientation = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ')
-    );
     const thrustAccel = new THREE.Vector3(0, 1, 0)
-      .applyQuaternion(orientation)
+      .applyQuaternion(this.orientation)
       .multiplyScalar(input.throttle * MAX_THRUST);
 
     const accel = thrustAccel
@@ -185,7 +218,7 @@ export class Drone {
   /** Copy the physics state onto the Three.js mesh and spin the rotors. */
   syncMesh() {
     this.mesh.position.copy(this.position);
-    this.mesh.rotation.set(this.pitch, this.yaw, this.roll, 'YXZ');
+    this.mesh.quaternion.copy(this.orientation);
     // Props are stopped at idle (so the blades read clearly, e.g. on the ready
     // screen) and spin up with throttle, alternating direction like a real
     // quad. As they spin, the solid blades fade into the blur disc.
@@ -204,6 +237,8 @@ export class Drone {
   reset() {
     this.position.copy(this.spawn);
     this.velocity.set(0, 0, 0);
+    this.orientation.identity();
+    this.heading = 0;
     this.yaw = 0;
     this.pitch = 0;
     this.roll = 0;
@@ -220,6 +255,8 @@ export class Drone {
   respawn(position, yaw) {
     this.position.copy(position);
     this.velocity.set(0, 0, 0);
+    this.orientation.setFromEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
+    this.heading = yaw;
     this.yaw = yaw;
     this.pitch = 0;
     this.roll = 0;
