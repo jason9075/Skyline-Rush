@@ -14,7 +14,7 @@
 
 import { AxisCapture } from './axisbind.js';
 import { AxisCalibrator } from './calibration.js';
-import { expoCurve, normalizeCentered } from './input.js';
+import { expoCurve } from './input.js';
 import { PRESET_LIST, CHANNELS, defaultPresetFor } from './presets.js';
 
 /** Self-contained styles for the binding grid; reuses the global --me-* palette. */
@@ -470,9 +470,7 @@ export class ControlsUI {
       calRow.append(calBar, calVal);
       cell.appendChild(calRow);
     }
-    this.cellBars.set(channel, {
-      fill, calFill, calVal, id: binding.id, axis: binding.axis, range: binding.range ?? null,
-    });
+    this.cellBars.set(channel, { fill, calFill, calVal, channel, binding });
 
     return cell;
   }
@@ -575,14 +573,16 @@ export class ControlsUI {
   updateBars() {
     if (this.cellBars.size === 0) return;
     const pads = navigator.getGamepads();
-    for (const { fill, calFill, calVal, id, axis, range } of this.cellBars.values()) {
-      const pad = Array.from(pads).find((p) => p && p.id === id);
-      const v = pad && pad.axes[axis] !== undefined ? pad.axes[axis] : 0;
-      fill.style.width = `${((Math.max(-1, Math.min(1, v)) + 1) / 2) * 100}%`;
-      if (calFill && range) {
-        const n = normalizeCentered(range, v);
-        calFill.style.width = `${((Math.max(-1, Math.min(1, n)) + 1) / 2) * 100}%`;
-        if (calVal) calVal.textContent = n.toFixed(2);
+    for (const { fill, calFill, calVal, channel, binding } of this.cellBars.values()) {
+      const pad = Array.from(pads).find((p) => p && p.id === binding.id);
+      const rawV = pad && pad.axes[binding.axis] !== undefined ? pad.axes[binding.axis] : 0;
+      fill.style.width = `${((Math.max(-1, Math.min(1, rawV)) + 1) / 2) * 100}%`;
+      if (calFill && binding.range) {
+        const after = this.input.channelValue(channel, binding, rawV);
+        // Throttle reads 0..1 (left = idle); centered channels -1..1 (mid = center).
+        const pct = channel === 'throttle' ? after * 100 : ((after + 1) / 2) * 100;
+        calFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+        if (calVal) calVal.textContent = after.toFixed(2);
       }
     }
   }

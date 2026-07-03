@@ -313,43 +313,45 @@ export class InputManager {
      * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
      * @returns {number | null}
      */
-    const raw = (bind) => {
+    const rawOf = (bind) => {
       if (!bind) return null;
       const pad = this.resolvePad(pads, bind);
       return pad && pad.axes[bind.axis] !== undefined ? pad.axes[bind.axis] : null;
     };
-    /**
-     * A centered channel, deadband-shaped, honoring calibration and direction.
-     * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
-     * @returns {number}
-     */
-    const centered = (bind) => {
-      const value = raw(bind);
-      if (value === null) return 0;
-      const v = bind.range ? normalizeCentered(bind.range, value) : value;
-      return shapeAxis(v * bind.sign);
-    };
-
-    const t = bindings.throttle;
-    const tRaw = raw(t);
-    let throttle = 0;
-    if (tRaw !== null) {
-      if (t.range) {
-        const span = t.range.max - t.range.min;
-        // Throttle sticks don't self-center: map full travel to 0..1.
-        throttle = span < 1e-6 ? 0 : (tRaw - t.range.min) / span;
-        if (t.sign < 0) throttle = 1 - throttle;
-      } else {
-        throttle = (tRaw * t.sign + 1) / 2;
-      }
-      throttle = Math.max(0, Math.min(1, throttle));
-    }
     return {
-      throttle,
-      yaw: centered(bindings.yaw),
-      pitch: centered(bindings.pitch),
-      roll: centered(bindings.roll),
+      throttle: this.channelValue('throttle', bindings.throttle, rawOf(bindings.throttle)),
+      yaw: this.channelValue('yaw', bindings.yaw, rawOf(bindings.yaw)),
+      pitch: this.channelValue('pitch', bindings.pitch, rawOf(bindings.pitch)),
+      roll: this.channelValue('roll', bindings.roll, rawOf(bindings.roll)),
     };
+  }
+
+  /**
+   * Final control value for one channel's binding at a raw axis reading, shared
+   * by the live poll and the grid's after-calibration readout. Throttle maps
+   * full travel to [0, 1] (no center); centered channels normalize to [-1, 1]
+   * and are deadband-shaped. A missing binding or lost device reads neutral (0).
+   * @param {string} channel Control channel.
+   * @param {import('./axisbind.js').AxisBinding | undefined} bind Axis binding.
+   * @param {number | null} rawValue Current raw axis value.
+   * @returns {number}
+   */
+  channelValue(channel, bind, rawValue) {
+    if (!bind || rawValue === null) return 0;
+    if (channel === 'throttle') {
+      let t;
+      if (bind.range) {
+        const span = bind.range.max - bind.range.min;
+        // Throttle sticks don't self-center: map full travel to 0..1.
+        t = span < 1e-6 ? 0 : (rawValue - bind.range.min) / span;
+        if (bind.sign < 0) t = 1 - t;
+      } else {
+        t = (rawValue * bind.sign + 1) / 2;
+      }
+      return Math.max(0, Math.min(1, t));
+    }
+    const v = bind.range ? normalizeCentered(bind.range, rawValue) : rawValue;
+    return shapeAxis(v * bind.sign);
   }
 
   /**
