@@ -383,8 +383,9 @@ export class InputManager {
       if (!raw) return null;
       const b = JSON.parse(raw);
       if (!b || typeof b !== 'object') return null;
-      // Accept a partial set — the grid can clear individual channels.
-      return ['throttle', 'yaw', 'pitch', 'roll'].some((c) => b[c]) ? b : null;
+      // Accept partial or empty sets: the grid can clear channels, and an
+      // explicit empty {} means "cleared" — distinct from no saved key (= auto).
+      return b;
     } catch (err) {
       console.warn('Failed to load bindings:', err);
       return null;

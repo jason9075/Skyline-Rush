@@ -29,15 +29,16 @@ style.textContent = `
   .bind-corner { border-color: transparent; }
   .bind-devhead {
     font-weight: 700; background: var(--me-light); text-align: center;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; flex-direction: column; gap: 5px; justify-content: center;
   }
+  .bind-devhead .devhead-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bind-rowlabel {
     font-weight: 700; background: var(--me-light); text-transform: uppercase;
     letter-spacing: 0.05em; display: flex; align-items: center;
   }
   .bind-cell {
     background: var(--me-panel); cursor: pointer; display: flex;
-    flex-direction: column; gap: 4px; min-height: 3.4em; justify-content: center;
+    flex-direction: column; gap: 4px; min-height: 60px; justify-content: center;
   }
   .bind-cell.empty { color: var(--me-mid); align-items: center; text-align: center; }
   .bind-cell.bound { cursor: default; }
@@ -49,10 +50,11 @@ style.textContent = `
   }
   .bind-cell .cell-axis:hover { color: var(--me-red); }
   .bind-cell .cell-axis:disabled { cursor: default; color: var(--me-dark); }
-  .bind-cell .cell-actions {
+  .bind-cell .cell-head {
     display: flex; gap: 5px; align-items: center; justify-content: center;
     font-size: 0.72rem; flex-wrap: nowrap; white-space: nowrap;
   }
+  .bind-cell .cell-sep { color: var(--me-gray); }
   .bind-cell label.cell-rev { display: flex; align-items: center; gap: 3px; cursor: pointer; height: 20px; }
   .bind-cell button.cell-btn {
     font: inherit; font-size: 0.72rem; border: 1px solid var(--me-gray);
@@ -64,20 +66,21 @@ style.textContent = `
   .bind-cell .cell-bar { height: 4px; background: var(--me-light); border-radius: 2px; overflow: hidden; }
   .bind-cell .cell-fill { height: 100%; width: 50%; background: var(--me-blue); }
   .bind-cell .cell-fill-cal { background: var(--me-orange); }
-  .bind-cell .cell-cal { display: flex; align-items: center; gap: 5px; }
-  .bind-cell .cell-cal .cell-bar { flex: 1; }
+  .bind-cell .cell-meter { display: flex; align-items: center; gap: 5px; }
+  .bind-cell .cell-meter .cell-bar { flex: 1; }
   .bind-cell .cell-calval {
     font-size: 0.66rem; color: var(--me-mid); min-width: 2.7em; text-align: right;
     font-variant-numeric: tabular-nums;
   }
   .bind-devhead.offline { opacity: 0.55; font-style: italic; }
   .bind-cell.offline { background: var(--me-light); }
-  .bind-cell .cell-move {
+  .cell-move {
     font: inherit; font-size: 0.7rem; width: 100%; cursor: pointer;
     border: 1px solid var(--me-gray); border-radius: 2px; padding: 1px 2px;
     background: #fff; color: var(--me-dark);
   }
   .bind-empty-msg { grid-column: 1 / -1; padding: 1rem; text-align: center; color: var(--me-mid); }
+  .ready-panel .secondary-button { width: min(320px, 100%); }
 `;
 document.head.appendChild(style);
 
@@ -94,7 +97,7 @@ const TUTORIALS = {
   gamepad: [
     'Pick a Control Preset above — Xbox for a standard gamepad, AETR/TAER for a RadioMaster.',
     'Sticks map to throttle / yaw / pitch / roll. Move a stick to wake the device.',
-    'Open Advanced Binding for split HOTAS rigs, reversing an axis, or range calibration.',
+    'Open Custom Binding for split HOTAS rigs, reversing an axis, or range calibration.',
   ],
   keyboard: [
     'W / S throttle · A / D yaw · Arrow keys pitch / roll.',
@@ -109,6 +112,14 @@ const CHANNEL_LABELS = { throttle: 'Throttle', yaw: 'Yaw', pitch: 'Pitch', roll:
 /** Set a select's value only if that option actually exists. */
 function setSelect(select, value) {
   if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
+}
+
+/** A dim vertical separator between items in a cell header row. */
+function sep() {
+  const s = document.createElement('span');
+  s.className = 'cell-sep';
+  s.textContent = '|';
+  return s;
 }
 
 /** Owns the ready-screen input configuration UI and its persistence. */
@@ -178,13 +189,15 @@ export class ControlsUI {
     this.advancedBind.addEventListener('click', () => this.openGrid());
     this.bindDone.addEventListener('click', () => this.closeGrid());
     this.bindClear.addEventListener('click', () => {
+      if (!window.confirm('Clear all axis bindings?')) return;
       this.capture.cancel();
       this.calibrator.cancel();
       this.capturingCell = null;
       this.calibratingCell = null;
-      this.input.clearBindings();
-      this.preset = null;
-      this.onSettingsChange();
+      // Explicit empty set (not clearBindings/null) so the grid stays empty
+      // instead of falling back to the auto preset.
+      this.input.setBindings({});
+      this.markCustom();
       this.renderGrid();
     });
   }
@@ -341,23 +354,88 @@ export class ControlsUI {
   }
 
   /**
-   * Move a channel's binding onto another (connected) device, keeping the axis,
-   * direction, and calibration. Re-homes a binding whose original device is
-   * offline (or after a device swap) without re-capturing.
-   * @param {string} channel Control channel.
-   * @param {string} targetId Target device id.
+   * A device column header. Offline devices also get a "Move all" dropdown that
+   * transfers every binding on that device to a connected one.
+   * @param {{index?: number, id: string, connected: boolean}} device Column device.
+   * @returns {HTMLElement}
    */
-  moveBinding(channel, targetId) {
+  renderDeviceHead(device) {
+    const head = document.createElement('div');
+    head.className = device.connected ? 'bind-devhead' : 'bind-devhead offline';
+    head.title = device.id;
+    const name = document.createElement('div');
+    name.className = 'devhead-name';
+    name.textContent = device.connected ? `${device.index}: ${device.id}` : `${device.id} (offline)`;
+    head.appendChild(name);
+    if (!device.connected) head.appendChild(this.buildMoveAll(device));
+    return head;
+  }
+
+  /**
+   * "Move all to…" dropdown for an offline device: transfers all of its
+   * bindings onto the chosen connected device, after a confirm — the move
+   * overwrites whatever bindings that device currently has.
+   * @param {{id: string}} device Offline source device.
+   * @returns {HTMLElement}
+   */
+  buildMoveAll(device) {
+    const busy = this.capture.active || this.calibrator.active;
+    const connected = this.input.listGamepads();
+    const move = document.createElement('select');
+    move.className = 'cell-move';
+    move.disabled = busy || connected.length === 0;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = connected.length ? 'Move all to…' : 'No device connected';
+    move.appendChild(placeholder);
+    for (const d of connected) {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = `${d.index}: ${d.id}`;
+      move.appendChild(opt);
+    }
+    move.addEventListener('change', () => {
+      const targetId = move.value;
+      move.value = '';
+      if (!targetId) return;
+      const target = connected.find((d) => d.id === targetId);
+      const count = CHANNELS.filter((c) => this.currentBindings()[c]?.id === device.id).length;
+      const ok = window.confirm(
+        `Move all ${count} binding(s) from "${device.id}" onto "${target.id}"? ` +
+          `This overwrites any bindings currently on "${target.id}".`
+      );
+      if (ok) this.moveDevice(device.id, targetId);
+    });
+    return move;
+  }
+
+  /**
+   * Move every binding on one device onto another, keeping each axis /
+   * direction / calibration. The target device's own bindings are dropped — it
+   * takes over the source device's role.
+   * @param {string} sourceId Source device id.
+   * @param {string} targetId Target (connected) device id.
+   */
+  moveDevice(sourceId, targetId) {
     const target = this.input.listGamepads().find((d) => d.id === targetId);
-    const b = this.currentBindings()[channel];
-    if (!target || !b) return;
-    this.setBinding(channel, { ...b, id: target.id, index: target.index });
+    if (!target) return;
+    const src = this.currentBindings();
+    const next = {};
+    for (const channel of CHANNELS) {
+      const b = src[channel];
+      if (!b) continue;
+      if (b.id === sourceId) next[channel] = { ...b, id: target.id, index: target.index };
+      else if (b.id !== targetId) next[channel] = b;
+    }
+    this.input.setBindings(next);
+    this.markCustom();
     this.renderGrid();
   }
 
   /**
    * A cell in an offline device's column: shows the binding (when this channel
-   * is bound to that device) with a dropdown to move it onto a live device.
+   * is bound to that device) with a per-cell clear. Moving is done per-device
+   * from the column header ({@link buildMoveAll}).
    * @param {string} channel Control channel.
    * @param {import('./axisbind.js').AxisBinding | undefined} binding This channel's binding.
    * @param {boolean} bound Whether this channel is bound to the offline device.
@@ -378,25 +456,6 @@ export class ControlsUI {
     axisLabel.className = 'cell-axis';
     axisLabel.textContent = `Axis ${binding.axis}`;
 
-    const connected = this.input.listGamepads();
-    const move = document.createElement('select');
-    move.className = 'cell-move';
-    move.disabled = busy || connected.length === 0;
-    move.title = 'Move this binding to a connected device';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = connected.length ? 'Move to…' : 'No device connected';
-    move.appendChild(placeholder);
-    for (const d of connected) {
-      const opt = document.createElement('option');
-      opt.value = d.id;
-      opt.textContent = `${d.index}: ${d.id}`;
-      move.appendChild(opt);
-    }
-    move.addEventListener('change', () => {
-      if (move.value) this.moveBinding(channel, move.value);
-    });
-
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
     clearBtn.className = 'cell-btn';
@@ -405,11 +464,11 @@ export class ControlsUI {
     clearBtn.disabled = busy;
     clearBtn.addEventListener('click', () => this.clearCell(channel));
 
-    const actions = document.createElement('div');
-    actions.className = 'cell-actions';
-    actions.appendChild(clearBtn);
+    const head = document.createElement('div');
+    head.className = 'cell-head';
+    head.append(axisLabel, sep(), clearBtn);
 
-    cell.append(axisLabel, move, actions);
+    cell.appendChild(head);
     return cell;
   }
 
@@ -438,17 +497,11 @@ export class ControlsUI {
       return;
     }
 
-    grid.style.gridTemplateColumns = `minmax(64px, max-content) repeat(${devices.length}, minmax(158px, 1fr))`;
+    grid.style.gridTemplateColumns = `minmax(64px, max-content) repeat(${devices.length}, minmax(184px, 1fr))`;
     const corner = document.createElement('div');
     corner.className = 'bind-corner';
     grid.appendChild(corner);
-    for (const d of devices) {
-      const head = document.createElement('div');
-      head.className = d.connected ? 'bind-devhead' : 'bind-devhead offline';
-      head.textContent = d.connected ? `${d.index}: ${d.id}` : `${d.id} (offline)`;
-      head.title = d.id;
-      grid.appendChild(head);
-    }
+    for (const d of devices) grid.appendChild(this.renderDeviceHead(d));
 
     for (const channel of CHANNELS) {
       const rowLabel = document.createElement('div');
@@ -501,8 +554,8 @@ export class ControlsUI {
     axisLabel.disabled = busy;
     axisLabel.addEventListener('click', () => this.beginCapture(channel, device.id));
 
-    const actions = document.createElement('div');
-    actions.className = 'cell-actions';
+    const head = document.createElement('div');
+    head.className = 'cell-head';
 
     const rev = document.createElement('label');
     rev.className = 'cell-rev';
@@ -532,14 +585,20 @@ export class ControlsUI {
     clearBtn.disabled = busy;
     clearBtn.addEventListener('click', () => this.clearCell(channel));
 
-    actions.append(rev, calBtn, clearBtn);
+    head.append(axisLabel, sep(), rev, sep(), calBtn, sep(), clearBtn);
 
+    const rawRow = document.createElement('div');
+    rawRow.className = 'cell-meter';
     const bar = document.createElement('div');
     bar.className = 'cell-bar';
     const fill = document.createElement('div');
     fill.className = 'cell-fill';
     bar.appendChild(fill);
-    cell.append(axisLabel, actions, bar);
+    const rawVal = document.createElement('span');
+    rawVal.className = 'cell-calval';
+    rawVal.textContent = '0.00';
+    rawRow.append(bar, rawVal);
+    cell.append(head, rawRow);
 
     // Calibrated channels get a second bar + numeric readout for the post-cal
     // value (raw normalized through the range), so the effect is visible.
@@ -547,7 +606,7 @@ export class ControlsUI {
     let calVal = null;
     if (binding.range) {
       const calRow = document.createElement('div');
-      calRow.className = 'cell-cal';
+      calRow.className = 'cell-meter';
       const calBar = document.createElement('div');
       calBar.className = 'cell-bar';
       calFill = document.createElement('div');
@@ -559,7 +618,7 @@ export class ControlsUI {
       calRow.append(calBar, calVal);
       cell.appendChild(calRow);
     }
-    this.cellBars.set(channel, { fill, calFill, calVal, channel, binding });
+    this.cellBars.set(channel, { fill, rawVal, calFill, calVal, channel, binding });
 
     return cell;
   }
@@ -609,14 +668,10 @@ export class ControlsUI {
     if (this.capture.active || this.calibrator.active) return;
     const base = { ...this.currentBindings() };
     delete base[channel];
-    if (Object.keys(base).length === 0) {
-      this.input.clearBindings();
-      this.preset = null;
-      this.onSettingsChange();
-    } else {
-      this.input.setBindings(base);
-      this.markCustom();
-    }
+    // Keep the explicit set (empty {} included) so cleared cells stay cleared
+    // rather than reverting to the auto preset.
+    this.input.setBindings(base);
+    this.markCustom();
     this.renderGrid();
   }
 
@@ -662,10 +717,11 @@ export class ControlsUI {
   updateBars() {
     if (this.cellBars.size === 0) return;
     const pads = navigator.getGamepads();
-    for (const { fill, calFill, calVal, channel, binding } of this.cellBars.values()) {
+    for (const { fill, rawVal, calFill, calVal, channel, binding } of this.cellBars.values()) {
       const pad = Array.from(pads).find((p) => p && p.id === binding.id);
       const rawV = pad && pad.axes[binding.axis] !== undefined ? pad.axes[binding.axis] : 0;
       fill.style.width = `${((Math.max(-1, Math.min(1, rawV)) + 1) / 2) * 100}%`;
+      if (rawVal) rawVal.textContent = rawV.toFixed(2);
       if (calFill && binding.range) {
         const after = this.input.channelValue(channel, binding, rawV);
         // Throttle reads 0..1 (left = idle); centered channels -1..1 (mid = center).
