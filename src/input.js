@@ -14,6 +14,14 @@ import { presetBindings, defaultPresetFor } from './presets.js';
 /** Stick deadband applied to yaw/pitch/roll axes. */
 const DEADBAND = 0.04;
 
+/**
+ * Center-softening expo applied to the touch sticks in acro mode only. Acro
+ * maps the stick to an unbounded rotation rate, which is twitchy over the short
+ * touch throw; level is angle-clamped and stays linear. Desktop input is
+ * unaffected — it never flows through the touch branch.
+ */
+const TOUCH_ACRO_EXPO = 0.6;
+
 /** localStorage key for persisted multi-device axis bindings. */
 const BINDINGS_KEY = 'drone-control.bindings';
 
@@ -122,6 +130,12 @@ export class InputManager {
     this.keyboardThrottle = 0;
     /** Expo amounts in [0, 1] applied to the centered channels. */
     this.rates = { expo: 0, yawExpo: 0 };
+    /**
+     * Current flight mode, mirrored from the drone so the touch branch can pick
+     * the right shaping ({@link TOUCH_ACRO_EXPO}). Kept in sync by main.js.
+     * @type {'level'|'acro'}
+     */
+    this.flightMode = 'level';
 
     window.addEventListener('gamepadconnected', () => {
       if (this.onDevicesChange) this.onDevicesChange();
@@ -217,11 +231,13 @@ export class InputManager {
       // Once mounted (touch devices only), touch is the source even between
       // taps, so the held throttle survives lifting a thumb.
       this.setStatus('Input: touch');
+      // Soften the center in acro (rate) mode; level (angle) mode stays linear.
+      const expo = this.flightMode === 'acro' ? TOUCH_ACRO_EXPO : 0;
       return {
         throttle: this.touch.throttle,
-        yaw: shapeAxis(this.touch.yaw),
-        pitch: shapeAxis(this.touch.pitch),
-        roll: shapeAxis(this.touch.roll),
+        yaw: expoCurve(shapeAxis(this.touch.yaw), expo),
+        pitch: expoCurve(shapeAxis(this.touch.pitch), expo),
+        roll: expoCurve(shapeAxis(this.touch.roll), expo),
       };
     }
     this.setStatus(

@@ -420,6 +420,7 @@ window.addEventListener('keydown', (e) => {
 
 flightMode.addEventListener('change', (e) => {
   drone.flightMode = e.target.value;
+  input.flightMode = e.target.value;
 });
 
 osdCheckbox.addEventListener('change', syncOsd);
@@ -476,6 +477,9 @@ dropButton.addEventListener('pointerdown', (e) => {
 
 /* ─── Main loop ───────────────────────────────────────────────────── */
 settingsStore.load();
+// settingsStore.load() restored drone.flightMode; mirror it onto the input so
+// the touch branch shapes the sticks for the right mode from the first frame.
+input.flightMode = drone.flightMode;
 controlsUi.init();
 syncGameModeUi();
 // Re-sync the FPV tilt after load, since it may have restored a new pitch value.
