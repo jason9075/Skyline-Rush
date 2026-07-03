@@ -3,11 +3,10 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 import hdrSkyUrl from '../assets/kloofendal_48d_partly_cloudy_puresky_1k.hdr?url';
 import { loadBuildingPool } from './buildings.js';
-import { AxisBinder } from './axisbind.js';
-import { CalibrationWizard } from './calibration.js';
+import { ControlsUI } from './controls-ui.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
-import { expoCurve, InputManager } from './input.js';
+import { InputManager, setSelect } from './input.js';
 import { StrikeMission, DRONE_HP, BOMB_MAX } from './strike.js';
 import { TouchControls } from './touch.js';
 import { World } from './world.js';
@@ -35,8 +34,8 @@ style.textContent = `
   }
   #info::before { content: ''; display: inline-block; width: 0.6em; height: 0.6em;
     background: var(--me-red); margin-right: 0.5em; }
-  /* Topmost layer (above the ready/calibration overlays at 40/45 and the
-     HUD at 46) so settings stay adjustable on the start screen. */
+  /* Topmost layer (above the ready overlay at 40, the binding/rates overlays
+     at 45, and the HUD at 46) so settings stay adjustable on the start screen. */
   #toolbar {
     position: fixed; top: 1rem; right: 1rem;
     display: flex; gap: 0.5rem; align-items: center;
@@ -97,8 +96,8 @@ style.textContent = `
   .modal-body input[type="range"] { accent-color: var(--me-red); cursor: pointer; }
   #camera-pitch-value { color: var(--me-dark); font-family: monospace; }
   .modal-body .toggle-label { margin-top: 0.4rem; }
-  /* Above the ready/calibration overlays (40/45) so the sticks stay visible
-     for verifying the RC controller before starting. */
+  /* Above the ready and binding/rates overlays (40/45) so the sticks stay
+     visible for verifying the controller before starting. */
   #hud {
     position: fixed; bottom: 1rem; left: 1rem; z-index: 46;
     display: grid; gap: 0.5rem; font-size: 0.8rem;
@@ -342,11 +341,6 @@ style.textContent = `
     border: 1px solid var(--me-gray); background: var(--me-panel); color: var(--me-dark);
   }
   .secondary-button:hover { border-color: var(--me-red); color: var(--me-red); }
-  #calibration-overlay {
-    position: fixed; inset: 0; display: grid; place-items: center;
-    background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
-  }
-  #calibration-overlay[hidden] { display: none; }
   #rates-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
@@ -375,31 +369,8 @@ style.textContent = `
     border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
   }
   #rates-done:hover { background: var(--me-red-dark); }
-  #calib-instruction { min-height: 3em; }
-  #calib-status { color: var(--me-orange); font-size: 0.8rem; min-height: 1.2em; font-weight: 700; }
-  #calib-axes { display: grid; gap: 0.35rem; }
-  .calib-axis {
-    display: grid; grid-template-columns: 2.2rem 1fr; align-items: center;
-    gap: 0.5rem; font-size: 0.75rem; color: var(--me-mid); font-family: monospace;
-  }
-  .calib-track {
-    height: 10px; border: 1px solid var(--me-gray); border-radius: 2px;
-    background: var(--me-light); overflow: hidden;
-  }
-  .calib-fill {
-    height: 100%; width: 50%; background: var(--me-blue);
-    transition: width 0.05s linear;
-  }
-  .calib-fill.assigned { background: var(--me-red); }
   .calib-actions { display: flex; gap: 0.5rem; justify-content: center; }
   .calib-actions button { font: inherit; }
-  #calib-next {
-    cursor: pointer; padding: 0.5rem 1.4rem; border-radius: 2px;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    border: 1px solid var(--me-red); background: var(--me-red); color: #fff;
-  }
-  #calib-next:hover { background: var(--me-red-dark); }
-  #calib-next[hidden] { display: none; }
   #binding-overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(250, 251, 252, 0.65); backdrop-filter: blur(4px); z-index: 45;
@@ -427,9 +398,7 @@ style.textContent = `
     right: auto; bottom: auto; left: 1rem; top: 1rem;
     flex-direction: column; align-items: flex-start; gap: 0.5rem;
   }
-  /* The Space/Enter footnote is keyboard-specific; hide it on touch. The
-     calibrate button and calibration-status footnote are toggled per input
-     source in updateTutorial(). */
+  /* The Space/Enter footnote is keyboard-specific; hide it on touch. */
   body.touch .ready-footnote { display: none; }
 `;
 document.head.appendChild(style);
@@ -467,8 +436,6 @@ const osdAltValue = document.getElementById('osd-alt-value');
 const cameraMode = document.getElementById('camera-mode');
 const cameraPitch = document.getElementById('camera-pitch');
 const cameraPitchValue = document.getElementById('camera-pitch-value');
-const inputDevice = document.getElementById('input-device');
-const channelMap = document.getElementById('channel-map');
 const resetButton = document.getElementById('reset-button');
 const gamepadStatus = document.getElementById('gamepad-status');
 const stickLeft = document.getElementById('stick-left');
@@ -477,33 +444,8 @@ const crashBanner = document.getElementById('crash-banner');
 const armBanner = document.getElementById('arm-banner');
 const godModeCheckbox = document.getElementById('god-mode');
 const readyOverlay = document.getElementById('ready-overlay');
-const readyTutorial = document.getElementById('ready-tutorial');
 const startButton = document.getElementById('start-button');
 const loadingText = document.getElementById('loading-text');
-const calibrateButton = document.getElementById('calibrate-button');
-const bindButton = document.getElementById('bind-button');
-const ratesButton = document.getElementById('rates-button');
-const ratesOverlay = document.getElementById('rates-overlay');
-const ratesDone = document.getElementById('rates-done');
-const expoSlider = document.getElementById('expo-slider');
-const expoValue = document.getElementById('expo-value');
-const yawExpoSlider = document.getElementById('yaw-expo-slider');
-const yawExpoValue = document.getElementById('yaw-expo-value');
-const expoCanvas = document.getElementById('expo-curve');
-const calibrationStatus = document.getElementById('calibration-status');
-const calibrationOverlay = document.getElementById('calibration-overlay');
-const calibInstruction = document.getElementById('calib-instruction');
-const calibAxes = document.getElementById('calib-axes');
-const calibStatus = document.getElementById('calib-status');
-const calibNext = document.getElementById('calib-next');
-const calibCancel = document.getElementById('calib-cancel');
-const calibClear = document.getElementById('calib-clear');
-const bindingOverlay = document.getElementById('binding-overlay');
-const bindInstruction = document.getElementById('bind-instruction');
-const bindStatus = document.getElementById('bind-status');
-const bindNext = document.getElementById('bind-next');
-const bindCancel = document.getElementById('bind-cancel');
-const bindClear = document.getElementById('bind-clear');
 
 /* ─── Three.js scene ──────────────────────────────────────────────── */
 // Touch devices are treated as mobile: shadows are disabled and the pixel
@@ -603,119 +545,8 @@ if (isTouch) {
   }
 }
 
-/* ─── Input device selector ───────────────────────────────────────── */
-/**
- * Ready-screen tutorial text per input source. Touch always uses the on-screen
- * pads; the others depend on the selector and whether a pad is connected.
- * @type {Record<'touch' | 'gamepad' | 'keyboard', string[]>}
- */
-const TUTORIALS = {
-  touch: [
-    'Left stick — throttle (up / down) and yaw (turn). Throttle holds when you lift your thumb.',
-    'Right stick — pitch (forward / back) and roll (bank). Springs back to center.',
-    'Tap Start Flying, then race through the gates.',
-  ],
-  gamepad: [
-    'RadioMaster: plug in via USB, select "USB Joystick (HID)", move a stick to connect.',
-    'Sticks map to throttle / yaw / pitch / roll per the Channel Map or your calibration.',
-    'Run Calibrate Controller once if any axis is reversed or off-center.',
-  ],
-  keyboard: [
-    'W / S throttle · A / D yaw · Arrow keys pitch / roll.',
-    'R reset · C camera · G god mode · O OSD.',
-    'Connect a gamepad and pick it above for full stick control.',
-  ],
-};
-
-/**
- * Effective input source given the selector value and connected hardware.
- * On touch devices the on-screen pads are always the working source.
- * @returns {'touch' | 'gamepad' | 'keyboard'}
- */
-function effectiveSource() {
-  const v = inputDevice.value;
-  if (v !== 'keyboard' && (v !== 'auto' || input.listGamepads().length > 0)) return 'gamepad';
-  return isTouch ? 'touch' : 'keyboard';
-}
-
-/** Rebuild the ready-screen tutorial and calibration UI for the current source. */
-function updateTutorial() {
-  const source = effectiveSource();
-  readyTutorial.innerHTML = '';
-  for (const text of TUTORIALS[source]) {
-    const li = document.createElement('li');
-    li.textContent = text;
-    readyTutorial.appendChild(li);
-  }
-  // Calibration only applies to a physical gamepad.
-  calibrateButton.hidden = source !== 'gamepad';
-  calibrationStatus.hidden = source !== 'gamepad';
-  // Multi-device binding is for physical controller rigs, not the touch pads.
-  bindButton.hidden = isTouch;
-  bindButton.textContent = input.hasBindings() ? 'Re-bind Axes (Multi-Device)' : 'Bind Axes (Multi-Device)';
-}
-
-/** Push the selected device value into the input manager and refresh the UI. */
-function syncInputDevice() {
-  const v = inputDevice.value;
-  input.selectInput(v === 'auto' || v === 'keyboard' ? v : Number(v));
-  updateTutorial();
-}
-
-/**
- * Rebuild the device dropdown from the connected gamepads, preserving the
- * current choice when it's still available (otherwise falling back to Auto).
- * The two static options (Auto / Keyboard) are kept; only the dynamic
- * per-gamepad entries are refreshed.
- */
-function populateInputDevices() {
-  const prev = inputDevice.value;
-  inputDevice.querySelectorAll('option[data-pad]').forEach((o) => o.remove());
-  for (const { index, id } of input.listGamepads()) {
-    const opt = document.createElement('option');
-    opt.value = String(index);
-    opt.dataset.pad = '1';
-    opt.textContent = `${index}: ${id}`;
-    inputDevice.appendChild(opt);
-  }
-  inputDevice.value = Array.from(inputDevice.options).some((o) => o.value === prev) ? prev : 'auto';
-  syncInputDevice();
-}
-
-input.onDevicesChange = populateInputDevices;
-inputDevice.addEventListener('change', syncInputDevice);
-
-/* ─── Calibration wizard ──────────────────────────────────────────── */
-/** Sync the channel-map select and ready-screen status with input state. */
-function syncCalibrationUi() {
-  channelMap.value = input.channelMap;
-  calibrationStatus.textContent = input.calibration
-    ? 'Saved calibration found — Channel Map is set to Custom.'
-    : 'No saved calibration — using the AETR default map.';
-}
-
-const wizard = new CalibrationWizard(
-  input,
-  {
-    overlay: calibrationOverlay,
-    instruction: calibInstruction,
-    axesContainer: calibAxes,
-    status: calibStatus,
-    nextButton: calibNext,
-  },
-  syncCalibrationUi
-);
-
-const binder = new AxisBinder(
-  input,
-  {
-    overlay: bindingOverlay,
-    instruction: bindInstruction,
-    status: bindStatus,
-    nextButton: bindNext,
-  },
-  updateTutorial
-);
+/* ─── Input configuration UI ──────────────────────────────────────── */
+const controlsUi = new ControlsUI(input, isTouch, saveSettings);
 
 /* ─── State ───────────────────────────────────────────────────────── */
 /** @type {'ready' | 'flying' | 'crashed' | 'results'} */
@@ -855,7 +686,7 @@ function resetDrone(autoStart = false) {
  * always closes the overlay, and flight begins once the stick is confirmed low.
  */
 function startFlying() {
-  if (flightState !== 'ready' || wizard.active || binder.active || !world.ready) return;
+  if (flightState !== 'ready' || controlsUi.isBusy() || !world.ready) return;
   readyOverlay.hidden = true;
   resumeRun = false;
   pendingAutoStart = true;
@@ -868,7 +699,7 @@ function startFlying() {
  * unexpectedly — showing a reminder banner until the stick is lowered.
  */
 function attemptAutoArm() {
-  if (!pendingAutoStart || flightState !== 'ready' || wizard.active || binder.active || !world.ready) return;
+  if (!pendingAutoStart || flightState !== 'ready' || controlsUi.isBusy() || !world.ready) return;
   if ((input.hasBindings() || input.activeGamepad() || input.touchActive()) && input.poll(0).throttle > 0.1) {
     armBanner.hidden = false;
     return;
@@ -1073,68 +904,6 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-/* ─── Rates & Expo ────────────────────────────────────────────────── */
-/** Redraw the expo-curve preview: linear reference plus both active curves. */
-function drawExpoCurve() {
-  const ctx = expoCanvas.getContext('2d');
-  const w = expoCanvas.width;
-  const h = expoCanvas.height;
-  const pad = 12;
-  const toX = (v) => pad + ((v + 1) / 2) * (w - pad * 2);
-  const toY = (v) => h - pad - ((v + 1) / 2) * (h - pad * 2);
-
-  ctx.clearRect(0, 0, w, h);
-
-  // Center axes.
-  ctx.strokeStyle = '#C9D1D6';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(toX(-1), toY(0));
-  ctx.lineTo(toX(1), toY(0));
-  ctx.moveTo(toX(0), toY(-1));
-  ctx.lineTo(toX(0), toY(1));
-  ctx.stroke();
-
-  // Linear reference.
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(toX(-1), toY(-1));
-  ctx.lineTo(toX(1), toY(1));
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const plot = (expo, color) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let i = 0; i <= 64; i++) {
-      const x = -1 + (i / 64) * 2;
-      const y = expoCurve(x, expo);
-      if (i === 0) ctx.moveTo(toX(x), toY(y));
-      else ctx.lineTo(toX(x), toY(y));
-    }
-    ctx.stroke();
-  };
-  plot(input.rates.yawExpo, '#4FA3D9');
-  plot(input.rates.expo, '#E0301E');
-
-  // Legend.
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#E0301E';
-  ctx.fillText('PITCH/ROLL', pad + 2, pad + 10);
-  ctx.fillStyle = '#4FA3D9';
-  ctx.fillText('YAW', pad + 2, pad + 24);
-}
-
-/** Push the slider values into the input rates, labels, and curve preview. */
-function syncRates() {
-  input.rates.expo = Number(expoSlider.value) / 100;
-  input.rates.yawExpo = Number(yawExpoSlider.value) / 100;
-  expoValue.textContent = `${expoSlider.value}%`;
-  yawExpoValue.textContent = `${yawExpoSlider.value}%`;
-  drawExpoCurve();
-}
-
 /* ─── Settings persistence ────────────────────────────────────────── */
 const SETTINGS_KEY = 'drone-control.settings';
 
@@ -1146,23 +915,15 @@ function saveSettings() {
     difficulty: difficulty.value,
     cameraMode: cameraMode.value,
     cameraPitch: cameraPitch.value,
-    inputDevice: inputDevice.value,
-    channelMap: channelMap.value,
     godMode: godModeCheckbox.checked,
     osd: osdCheckbox.checked,
-    expo: expoSlider.value,
-    yawExpo: yawExpoSlider.value,
+    ...controlsUi.collectSettings(),
   };
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch (err) {
     console.warn('Failed to persist settings:', err);
   }
-}
-
-/** Set a select's value only if that option actually exists. */
-function setSelect(select, value) {
-  if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
 }
 
 /**
@@ -1186,25 +947,11 @@ function loadSettings() {
   if (s.cameraPitch !== undefined && Number.isFinite(Number(s.cameraPitch))) {
     cameraPitch.value = String(s.cameraPitch);
   }
-  // Only 'auto'/'keyboard' are stable across sessions; a saved gamepad index
-  // has no matching option yet at load, so setSelect harmlessly ignores it
-  // and populateInputDevices() re-applies it if the pad is still present.
-  if (typeof s.inputDevice === 'string') setSelect(inputDevice, s.inputDevice);
-  // Only restore CUSTOM if a calibration actually exists this session.
-  if (typeof s.channelMap === 'string' && (s.channelMap !== 'CUSTOM' || input.calibration)) {
-    setSelect(channelMap, s.channelMap);
-  }
   if (typeof s.godMode === 'boolean') godModeCheckbox.checked = s.godMode;
   if (typeof s.osd === 'boolean') osdCheckbox.checked = s.osd;
-  if (s.expo !== undefined && Number.isFinite(Number(s.expo))) {
-    expoSlider.value = String(s.expo);
-  }
-  if (s.yawExpo !== undefined && Number.isFinite(Number(s.yawExpo))) {
-    yawExpoSlider.value = String(s.yawExpo);
-  }
+  controlsUi.applySettings(s);
 
   drone.flightMode = flightMode.value;
-  input.channelMap = channelMap.value;
 }
 
 /* ─── Event listeners ─────────────────────────────────────────────── */
@@ -1218,11 +965,6 @@ settingsModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !settingsModal.hidden) settingsModal.hidden = true;
-  if (e.code === 'Escape' && !ratesOverlay.hidden) ratesOverlay.hidden = true;
-});
-
-channelMap.addEventListener('change', (e) => {
-  input.channelMap = e.target.value;
 });
 
 flightMode.addEventListener('change', (e) => {
@@ -1236,32 +978,6 @@ gameMode.addEventListener('change', () => {
   rebuildMode();
 });
 difficulty.addEventListener('change', rebuildMode);
-
-ratesButton.addEventListener('click', () => {
-  drawExpoCurve();
-  ratesOverlay.hidden = false;
-});
-ratesDone.addEventListener('click', () => { ratesOverlay.hidden = true; });
-expoSlider.addEventListener('input', syncRates);
-yawExpoSlider.addEventListener('input', syncRates);
-// Persist on release rather than every drag tick.
-ratesOverlay.addEventListener('change', saveSettings);
-
-calibrateButton.addEventListener('click', () => wizard.start());
-calibNext.addEventListener('click', () => wizard.next());
-calibCancel.addEventListener('click', () => wizard.cancel());
-calibClear.addEventListener('click', () => {
-  input.clearCalibration();
-  wizard.cancel();
-});
-
-bindButton.addEventListener('click', () => binder.start());
-bindNext.addEventListener('click', () => binder.next());
-bindCancel.addEventListener('click', () => binder.cancel());
-bindClear.addEventListener('click', () => {
-  input.clearBindings();
-  binder.cancel();
-});
 
 resetButton.addEventListener('click', () => resetDrone());
 startButton.addEventListener('click', startFlying);
@@ -1320,12 +1036,10 @@ function updateStick(dot, x, y) {
 
 /* ─── Main loop ───────────────────────────────────────────────────── */
 loadSettings();
-populateInputDevices();
-syncCalibrationUi();
+controlsUi.init();
 syncGameModeUi();
 syncCameraPitch();
 syncOsdVisibility();
-syncRates();
 
 const camDirTmp = new THREE.Vector3();
 
@@ -1354,8 +1068,7 @@ function animate(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  wizard.update(dt);
-  binder.update(dt);
+  controlsUi.update(dt);
 
   if (flightState === 'crashed') {
     crashTimer -= dt;
@@ -1366,9 +1079,10 @@ function animate(now) {
     // Frozen scene behind the results overlay; wait for Play Again.
   } else if (flightState === 'ready') {
     // Physics paused: just mirror stick input so the controller can be verified.
-    // While calibrating, preview the in-progress calibration (not the still-active
-    // old channel map) so the sticks reflect what Save & Finish will commit.
-    const controls = wizard.active ? wizard.previewControls() : input.poll(dt);
+    // previewControls() is a hook for showing an in-progress config on the ready
+    // sticks; it currently returns null (the binding grid has its own bars), so
+    // this reads the live poll.
+    const controls = controlsUi.previewControls() ?? input.poll(dt);
     updateStick(stickLeft, controls.yaw, controls.throttle * 2 - 1);
     updateStick(stickRight, controls.roll, controls.pitch);
     attemptAutoArm();

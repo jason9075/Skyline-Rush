@@ -10,11 +10,13 @@ an infinite procedurally generated city, using either a real RC transmitter
 - **Angle-mode flight physics** — sticks command tilt angles; thrust, gravity,
   and linear drag are integrated with semi-implicit Euler. Hover sits near 40%
   throttle (thrust-to-weight ratio ≈ 2.5).
-- **RC transmitter support via the Gamepad API** — plug a RadioMaster (EdgeTX)
-  in via USB and select *USB Joystick (HID)*. AETR and TAER channel maps are
-  built in.
-- **Controller calibration wizard** — sweeps axis ranges, captures stick
-  centers, and auto-detects channel assignment and direction per control.
+- **Game controller support via the Gamepad API** — a **Control Preset**
+  dropdown maps a standard gamepad (Xbox) or a RadioMaster (EdgeTX, AETR/TAER)
+  in one click; plug in and fly.
+- **DCS-style axis binding grid** — columns are devices, rows are controls:
+  click a cell to bind a control to an axis on any device (split HOTAS / dual
+  stick), toggle reverse, and calibrate an axis's range per cell. Offline
+  devices keep a column so their bindings can be moved onto a live device.
   Results persist in `localStorage`.
 - **Infinite procedural city** — a deterministic street network (see
   `citygen.js`): a regular grid is domain-warped into gently **curving streets**,
@@ -49,7 +51,7 @@ an infinite procedurally generated city, using either a real RC transmitter
 
 | Input | Action |
 | --- | --- |
-| RC transmitter | Throttle / yaw / pitch / roll per channel map or calibration |
+| Game controller | Throttle / yaw / pitch / roll per the Control Preset or custom binding |
 | `W` / `S` | Throttle up / down |
 | `A` / `D` | Yaw left / right |
 | Arrow keys | Pitch / roll |
@@ -109,8 +111,11 @@ src/
 ├── world.js          # chunk streaming: ground tiles, placement, AABB collision
 ├── citygen.js        # deterministic PCG: warped streets, roundabouts, zoning
 ├── buildings.js      # GLB building loader (merges primitives, centers geometry)
-├── input.js          # Gamepad API + keyboard input, calibration storage
-└── calibration.js    # controller calibration wizard
+├── input.js          # Gamepad API + keyboard input, axis-binding storage
+├── controls-ui.js    # ready-screen input UI: preset dropdown + binding grid
+├── presets.js        # one-click axis-binding presets (Xbox / RadioMaster)
+├── axisbind.js       # single-cell axis capture for the binding grid
+└── calibration.js    # per-axis range calibration for a bound cell
 ```
 
 ## License
