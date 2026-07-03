@@ -7,9 +7,15 @@ an infinite procedurally generated city, using either a real RC transmitter
 
 ## Features
 
-- **Angle-mode flight physics** — sticks command tilt angles; thrust, gravity,
-  and linear drag are integrated with semi-implicit Euler. Hover sits near 40%
-  throttle (thrust-to-weight ratio ≈ 2.5).
+- **Angle-mode & acro flight physics** — thrust, gravity, and linear drag are
+  integrated with semi-implicit Euler; hover sits near 40% throttle
+  (thrust-to-weight ratio ≈ 2.5). Attitude is a single quaternion
+  (`drone.js`): **level** mode self-levels toward a heading + clamped tilt
+  setpoint, while **acro** mode integrates body-frame angular velocity onto the
+  quaternion so full flips and rolls stay correct — with no gimbal coupling
+  (integrating rate commands onto fixed Euler components instead would reverse
+  pitch after a ~180° roll). The camera/HUD read a derived Euler view of that
+  quaternion.
 - **Game controller support via the Gamepad API** — a **Control Preset**
   dropdown maps a standard gamepad (Xbox) or a RadioMaster (EdgeTX, AETR/TAER)
   in one click; plug in and fly.
@@ -104,8 +110,12 @@ GitHub Pages. The production base path is `/drone-control/` (see
 
 ```
 src/
-├── main.js           # scene, main loop, HUD, cameras, overlays
-├── drone.js          # quadcopter mesh + angle-mode flight physics
+├── main.js           # scene bootstrap, game state machine, main loop
+├── style.css         # Mirror's Edge palette + full UI/HUD layout
+├── camera.js         # CameraRig: Chase/FPV/Top views + crash-cam dolly
+├── hud.js            # Hud: OSD, gate/strike bars, stick indicators
+├── settings.js       # SettingsStore: localStorage persistence
+├── drone.js          # quadcopter mesh + quaternion flight physics (level/acro)
 ├── gates.js          # Gate Rush course: planning, guide lines, pass detection
 ├── strike.js         # Strike mode: enemy force, weapon AI, bombs, blast damage
 ├── world.js          # chunk streaming: ground tiles, placement, AABB collision
