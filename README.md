@@ -103,8 +103,10 @@ just clean     # remove dist/ and node_modules/
 
 Pushing to `main` triggers the GitHub Actions workflow in
 `.github/workflows/deploy.yml`, which builds the site and publishes `dist/` to
-GitHub Pages. The production base path is `/drone-control/` (see
-`vite.config.js`); change it if the repository name differs.
+GitHub Pages at <https://jason9075.github.io/Skyline-Rush/>. The production base
+path is `/Skyline-Rush/` (see `vite.config.js`); it must match the repository
+name, so update both if the repo is renamed — a rename can also leave the Pages
+backend stuck, which is fixed by resetting the Pages source (Settings → Pages).
 
 ## Project layout
 
