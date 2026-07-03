@@ -47,12 +47,6 @@
         </select>
         <label for="camera-pitch">Camera Tilt Angle <span id="camera-pitch-value">15°</span></label>
         <input type="range" id="camera-pitch" min="-40" max="40" step="1" value="15" />
-        <label for="channel-map">Channel Map</label>
-        <select id="channel-map">
-          <option value="AETR">AETR</option>
-          <option value="TAER">TAER</option>
-          <option value="CUSTOM">Custom (calibrated)</option>
-        </select>
         <label class="toggle-label" for="god-mode">
           <input type="checkbox" id="god-mode" />
           God Mode (G)
@@ -138,19 +132,15 @@
       </a>
       <h1>Drone Flight Simulator</h1>
       <p>Fly a quadcopter through the obstacle field.</p>
-      <label for="input-device" class="ready-device-label">Input Device</label>
-      <select id="input-device">
-        <option value="auto">Auto (first detected)</option>
-        <option value="keyboard">Keyboard only</option>
-      </select>
+      <label for="preset-select" class="ready-device-label">Control Preset</label>
+      <select id="preset-select"></select>
       <ul id="ready-tutorial"></ul>
       <p id="loading-text">Loading city…</p>
       <button id="start-button" type="button">Start Flying</button>
       <p class="ready-footnote">or press Space / Enter</p>
-      <button id="calibrate-button" type="button" class="secondary-button">Calibrate Controller</button>
-      <button id="bind-button" type="button" class="secondary-button">Bind Axes (Multi-Device)</button>
+      <button id="advanced-bind" type="button" class="secondary-button">Advanced Binding (Grid)</button>
       <button id="rates-button" type="button" class="secondary-button">Rates &amp; Expo</button>
-      <p id="calibration-status" class="ready-footnote"></p>
+      <p id="input-status" class="ready-footnote"></p>
     </div>
   </div>
 
@@ -173,30 +163,15 @@
     </div>
   </div>
 
-  <div id="calibration-overlay" hidden>
-    <div class="ready-panel">
-      <h1>Controller Calibration</h1>
-      <p id="calib-instruction"></p>
-      <div id="calib-axes" aria-label="Live axis values"></div>
-      <p id="calib-status"></p>
-      <div class="calib-actions">
-        <button id="calib-next" type="button">Next</button>
-        <button id="calib-cancel" type="button" class="secondary-button">Cancel</button>
-        <button id="calib-clear" type="button" class="secondary-button">Clear Saved</button>
-      </div>
-    </div>
-  </div>
-
   <div id="binding-overlay" hidden>
-    <div class="ready-panel">
-      <h1>Multi-Device Axis Binding</h1>
-      <p class="rates-hint">Bind each control to an axis on any device — for split HOTAS or dual-stick setups.</p>
-      <p id="bind-instruction"></p>
+    <div class="ready-panel bind-panel">
+      <h1>Axis Binding</h1>
+      <p class="rates-hint">Columns are devices, rows are controls. Click a cell to bind that control to an axis on that device — move the axis and hold. Toggle <b>Rev</b> to reverse direction, <b>Cal</b> to calibrate its range.</p>
+      <div id="bind-grid" aria-label="Axis binding matrix"></div>
       <p id="bind-status"></p>
       <div class="calib-actions">
-        <button id="bind-next" type="button">Next</button>
-        <button id="bind-cancel" type="button" class="secondary-button">Cancel</button>
-        <button id="bind-clear" type="button" class="secondary-button">Clear Saved</button>
+        <button id="bind-done" type="button">Done</button>
+        <button id="bind-clear" type="button" class="secondary-button">Clear All</button>
       </div>
     </div>
   </div>

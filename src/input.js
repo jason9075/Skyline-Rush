@@ -1,6 +1,6 @@
 /**
- * Input handling: RadioMaster RC controller via the Gamepad API,
- * with a keyboard fallback for development without hardware.
+ * Input handling: game controllers via the Gamepad API, mapped through per-axis
+ * bindings (filled by a preset or the binding grid), with a keyboard fallback.
  *
  * Normalized output convention:
  *   throttle: 0..1   (0 = idle, 1 = full thrust)
@@ -9,22 +9,11 @@
  *   roll:    -1..1   (positive = bank right)
  */
 
+import { presetBindings, defaultPresetFor } from './presets.js';
+
 /** Stick deadband applied to yaw/pitch/roll axes. */
 const DEADBAND = 0.04;
 
-/**
- * Axis index layouts for common RC channel orders.
- * RadioMaster (EdgeTX) in USB Joystick mode exposes channels as gamepad axes
- * in mixer order — AETR is the EdgeTX default, TAER is common on Betaflight-style setups.
- * @type {Record<string, {roll: number, pitch: number, throttle: number, yaw: number}>}
- */
-const CHANNEL_MAPS = {
-  AETR: { roll: 0, pitch: 1, throttle: 2, yaw: 3 },
-  TAER: { throttle: 0, roll: 1, pitch: 2, yaw: 3 },
-};
-
-/** localStorage key for persisted calibration data. */
-const CALIBRATION_KEY = 'drone-control.calibration';
 /** localStorage key for persisted multi-device axis bindings. */
 const BINDINGS_KEY = 'drone-control.bindings';
 
@@ -33,12 +22,6 @@ const BINDINGS_KEY = 'drone-control.bindings';
  * @property {number} min Raw minimum seen during calibration.
  * @property {number} center Raw neutral position.
  * @property {number} max Raw maximum seen during calibration.
- */
-
-/**
- * @typedef {Object} Calibration
- * @property {AxisRange[]} axes Per-axis raw ranges.
- * @property {Record<'throttle'|'yaw'|'pitch'|'roll', {axis: number, invert: boolean}>} mapping
  */
 
 /**
@@ -89,17 +72,19 @@ export class InputManager {
    * @param {(status: string) => void} onStatusChange Called when the active input source changes.
    */
   constructor(onStatusChange) {
-    /** @type {string} */
-    this.channelMap = 'AETR';
-    /** @type {Calibration | null} */
-    this.calibration = InputManager.loadCalibration();
-    if (this.calibration) this.channelMap = 'CUSTOM';
     /**
-     * DCS-style per-axis, cross-device bindings; take priority over the single
-     * gamepad path when complete. See {@link import('./axisbind.js').AxisBinder}.
+     * DCS-style per-axis, cross-device bindings; every controller channel reads
+     * through these (see {@link pollBindings}). Null until a preset or the
+     * binding grid fills them.
      * @type {Record<string, import('./axisbind.js').AxisBinding> | null}
      */
     this.bindings = InputManager.loadBindings();
+    /**
+     * Cached auto-preset for the out-of-box path, keyed by device id so the
+     * binding object stays stable across frames. Not persisted.
+     * @type {{id: string, bindings: Record<string, import('./axisbind.js').AxisBinding>} | null}
+     */
+    this.autoCache = null;
     /**
      * User-chosen gamepad index; null selects the first connected pad (auto).
      * @type {number | null}
@@ -147,13 +132,19 @@ export class InputManager {
       this.setStatus('Input: keyboard (selected)');
       return null;
     }
-    const pads = navigator.getGamepads();
-    const pad =
-      (this.selectedIndex !== null && pads[this.selectedIndex]) ||
-      Array.from(pads).find((p) => p) ||
-      null;
+    const pad = this.firstPad();
     this.setStatus(pad ? `Gamepad: ${pad.id}` : 'Gamepad: none (keyboard fallback active)');
     return pad;
+  }
+
+  /**
+   * The device the auto/selected path resolves to, without side effects: the
+   * explicit selection while it stays connected, else the first connected pad.
+   * @returns {Gamepad | null}
+   */
+  firstPad() {
+    const pads = navigator.getGamepads();
+    return (this.selectedIndex !== null && pads[this.selectedIndex]) || Array.from(pads).find((p) => p) || null;
   }
 
   /**
@@ -201,28 +192,20 @@ export class InputManager {
    * @returns {ControlInput}
    */
   pollRaw(dt) {
-    // DCS-style multi-device bindings win when complete (and not overridden by
-    // an explicit keyboard selection): they read each channel from its own
-    // device, so split HOTAS / dual-stick rigs bypass the single-pad path.
-    if (!this.forceKeyboard && this.hasBindings()) return this.pollBindings();
-    const pad = this.activeGamepad();
-    if (pad && pad.axes.length >= 4) {
-      if (this.channelMap === 'CUSTOM' && this.calibration) {
-        return this.pollCalibrated(pad);
-      }
-      const map = CHANNEL_MAPS[this.channelMap] ?? CHANNEL_MAPS.AETR;
-      return {
-        // RC throttle axis: -1 = stick down (idle), +1 = stick up (full).
-        throttle: Math.max(0, Math.min(1, (pad.axes[map.throttle] + 1) / 2)),
-        yaw: shapeAxis(pad.axes[map.yaw]),
-        // HID convention: pushing a stick forward reads negative — flip to "forward = +1".
-        pitch: shapeAxis(-pad.axes[map.pitch]),
-        roll: shapeAxis(pad.axes[map.roll]),
-      };
+    // Every controller channel flows through the binding set: the user's saved
+    // bindings when present, else an auto preset for the connected pad so a
+    // fresh device flies without opening the grid. Split HOTAS / dual-stick
+    // rigs read each channel from its own device here.
+    if (!this.forceKeyboard) {
+      // A saved set (even a partial one, if some cells were cleared) wins;
+      // otherwise a connected pad flies via its auto preset.
+      const bindings = this.bindings ?? this.autoBindings();
+      if (bindings) return this.pollBindings(bindings);
     }
     if (this.touch) {
       // Once mounted (touch devices only), touch is the source even between
       // taps, so the held throttle survives lifting a thumb.
+      this.setStatus('Input: touch');
       return {
         throttle: this.touch.throttle,
         yaw: shapeAxis(this.touch.yaw),
@@ -230,6 +213,9 @@ export class InputManager {
         roll: shapeAxis(this.touch.roll),
       };
     }
+    this.setStatus(
+      this.forceKeyboard ? 'Input: keyboard (selected)' : 'Gamepad: none (keyboard fallback active)'
+    );
     return this.pollKeyboard(dt);
   }
 
@@ -265,65 +251,36 @@ export class InputManager {
     };
   }
 
-  /**
-   * Read input through the user's saved calibration: per-axis ranges,
-   * detected channel assignment, and per-channel inversion.
-   * @param {Gamepad} pad Active gamepad.
-   * @returns {ControlInput}
-   */
-  pollCalibrated(pad) {
-    return this.calibratedControls(this.calibration, pad.axes);
-  }
-
-  /**
-   * Map raw axis values through a calibration into a ControlInput. Shared by the
-   * live CUSTOM poll and the calibration wizard's pre-save stick preview, so the
-   * on-screen sticks show the exact channel assignment and direction that will
-   * be saved. Channels whose mapping or range isn't ready yet (mid-calibration)
-   * read as neutral.
-   * @param {Calibration} calibration Axis ranges and channel mapping.
-   * @param {number[]} rawAxes Current raw axis values.
-   * @returns {ControlInput}
-   */
-  calibratedControls(calibration, rawAxes) {
-    const { axes, mapping } = calibration;
-    /**
-     * @param {'yaw'|'pitch'|'roll'} name Centered channel to read.
-     * @returns {number}
-     */
-    const centered = (name) => {
-      const m = mapping[name];
-      const range = m && axes[m.axis];
-      if (!range || rawAxes[m.axis] === undefined) return 0;
-      return shapeAxis(normalizeCentered(range, rawAxes[m.axis]) * (m.invert ? -1 : 1));
-    };
-
-    const t = mapping.throttle;
-    const tRange = t && axes[t.axis];
-    let throttle = 0;
-    if (tRange && rawAxes[t.axis] !== undefined) {
-      const span = tRange.max - tRange.min;
-      // Throttle sticks don't self-center: map the full travel to 0..1.
-      throttle = span < 1e-6 ? 0 : (rawAxes[t.axis] - tRange.min) / span;
-      if (t.invert) throttle = 1 - throttle;
-      throttle = Math.max(0, Math.min(1, throttle));
-    }
-    return { throttle, yaw: centered('yaw'), pitch: centered('pitch'), roll: centered('roll') };
-  }
-
-  /**
-   * Raw axis snapshot of the active gamepad (for the calibration UI).
-   * @returns {number[]}
-   */
-  rawAxes() {
-    const pad = this.activeGamepad();
-    return pad ? Array.from(pad.axes) : [];
-  }
-
   /** True when a complete set of multi-device axis bindings is active. */
   hasBindings() {
     const b = this.bindings;
     return Boolean(b && b.throttle && b.yaw && b.pitch && b.roll);
+  }
+
+  /**
+   * Transient binding set for the out-of-box path: when the user hasn't saved
+   * bindings yet, a connected pad still flies via its best-guess preset. Not
+   * persisted; cached per device id so the object is stable across frames.
+   * @returns {Record<string, import('./axisbind.js').AxisBinding> | null}
+   */
+  autoBindings() {
+    const pad = this.firstPad();
+    if (!pad) return null;
+    if (this.autoCache && this.autoCache.id === pad.id) return this.autoCache.bindings;
+    const bindings = presetBindings(defaultPresetFor(pad), pad);
+    this.autoCache = { id: pad.id, bindings };
+    return bindings;
+  }
+
+  /**
+   * Apply a named preset to the currently selected/first pad and persist it.
+   * @param {string} name Preset id (see {@link import('./presets.js').PRESET_LIST}).
+   * @returns {Record<string, import('./axisbind.js').AxisBinding> | null} Saved set, or null.
+   */
+  applyPreset(name) {
+    const bindings = presetBindings(name, this.firstPad());
+    if (bindings) this.setBindings(bindings);
+    return bindings;
   }
 
   /**
@@ -342,27 +299,56 @@ export class InputManager {
 
   /**
    * Read each channel from its own bound (device, axis), applying the captured
-   * direction. Centered channels are deadband-shaped; throttle maps [-1,1]→[0,1].
+   * direction. A binding may carry a calibrated range; without one the raw axis
+   * is assumed self-normalized to [-1, 1]. Centered channels are deadband-shaped;
+   * throttle maps full travel to [0, 1].
+   * @param {Record<string, import('./axisbind.js').AxisBinding>} bindings Active set.
    * @returns {ControlInput}
    */
-  pollBindings() {
+  pollBindings(bindings) {
     this.setStatus('Input: custom axis bindings');
     const pads = navigator.getGamepads();
     /**
+     * Raw value of a binding's axis, or null when its device/axis is gone.
+     * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
+     * @returns {number | null}
+     */
+    const raw = (bind) => {
+      if (!bind) return null;
+      const pad = this.resolvePad(pads, bind);
+      return pad && pad.axes[bind.axis] !== undefined ? pad.axes[bind.axis] : null;
+    };
+    /**
+     * A centered channel, deadband-shaped, honoring calibration and direction.
      * @param {import('./axisbind.js').AxisBinding} bind Axis binding.
      * @returns {number}
      */
-    const read = (bind) => {
-      const pad = this.resolvePad(pads, bind);
-      if (!pad || pad.axes[bind.axis] === undefined) return 0;
-      return pad.axes[bind.axis] * bind.sign;
+    const centered = (bind) => {
+      const value = raw(bind);
+      if (value === null) return 0;
+      const v = bind.range ? normalizeCentered(bind.range, value) : value;
+      return shapeAxis(v * bind.sign);
     };
-    const b = this.bindings;
+
+    const t = bindings.throttle;
+    const tRaw = raw(t);
+    let throttle = 0;
+    if (tRaw !== null) {
+      if (t.range) {
+        const span = t.range.max - t.range.min;
+        // Throttle sticks don't self-center: map full travel to 0..1.
+        throttle = span < 1e-6 ? 0 : (tRaw - t.range.min) / span;
+        if (t.sign < 0) throttle = 1 - throttle;
+      } else {
+        throttle = (tRaw * t.sign + 1) / 2;
+      }
+      throttle = Math.max(0, Math.min(1, throttle));
+    }
     return {
-      throttle: Math.max(0, Math.min(1, (read(b.throttle) + 1) / 2)),
-      yaw: shapeAxis(read(b.yaw)),
-      pitch: shapeAxis(read(b.pitch)),
-      roll: shapeAxis(read(b.roll)),
+      throttle,
+      yaw: centered(bindings.yaw),
+      pitch: centered(bindings.pitch),
+      roll: centered(bindings.roll),
     };
   }
 
@@ -394,48 +380,11 @@ export class InputManager {
       const raw = localStorage.getItem(BINDINGS_KEY);
       if (!raw) return null;
       const b = JSON.parse(raw);
-      if (!b || !b.throttle || !b.yaw || !b.pitch || !b.roll) return null;
-      return b;
+      if (!b || typeof b !== 'object') return null;
+      // Accept a partial set — the grid can clear individual channels.
+      return ['throttle', 'yaw', 'pitch', 'roll'].some((c) => b[c]) ? b : null;
     } catch (err) {
       console.warn('Failed to load bindings:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Persist and activate a new calibration.
-   * @param {Calibration} calibration Wizard result.
-   */
-  setCalibration(calibration) {
-    this.calibration = calibration;
-    this.channelMap = 'CUSTOM';
-    try {
-      localStorage.setItem(CALIBRATION_KEY, JSON.stringify(calibration));
-    } catch (err) {
-      console.warn('Failed to persist calibration:', err);
-    }
-  }
-
-  /** Remove the saved calibration and fall back to the AETR default. */
-  clearCalibration() {
-    this.calibration = null;
-    this.channelMap = 'AETR';
-    localStorage.removeItem(CALIBRATION_KEY);
-  }
-
-  /**
-   * Load a previously saved calibration, if any.
-   * @returns {Calibration | null}
-   */
-  static loadCalibration() {
-    try {
-      const raw = localStorage.getItem(CALIBRATION_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.axes) || !parsed.mapping) return null;
-      return parsed;
-    } catch (err) {
-      console.warn('Failed to load calibration:', err);
       return null;
     }
   }
