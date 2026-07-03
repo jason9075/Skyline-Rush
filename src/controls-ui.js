@@ -70,6 +70,13 @@ style.textContent = `
     font-size: 0.66rem; color: var(--me-mid); min-width: 2.7em; text-align: right;
     font-variant-numeric: tabular-nums;
   }
+  .bind-devhead.offline { opacity: 0.55; font-style: italic; }
+  .bind-cell.offline { background: var(--me-light); }
+  .bind-cell .cell-move {
+    font: inherit; font-size: 0.7rem; width: 100%; cursor: pointer;
+    border: 1px solid var(--me-gray); border-radius: 2px; padding: 1px 2px;
+    background: #fff; color: var(--me-dark);
+  }
   .bind-empty-msg { grid-column: 1 / -1; padding: 1rem; text-align: center; color: var(--me-mid); }
 `;
 document.head.appendChild(style);
@@ -333,12 +340,93 @@ export class ControlsUI {
     this.markCustom();
   }
 
+  /**
+   * Move a channel's binding onto another (connected) device, keeping the axis,
+   * direction, and calibration. Re-homes a binding whose original device is
+   * offline (or after a device swap) without re-capturing.
+   * @param {string} channel Control channel.
+   * @param {string} targetId Target device id.
+   */
+  moveBinding(channel, targetId) {
+    const target = this.input.listGamepads().find((d) => d.id === targetId);
+    const b = this.currentBindings()[channel];
+    if (!target || !b) return;
+    this.setBinding(channel, { ...b, id: target.id, index: target.index });
+    this.renderGrid();
+  }
+
+  /**
+   * A cell in an offline device's column: shows the binding (when this channel
+   * is bound to that device) with a dropdown to move it onto a live device.
+   * @param {string} channel Control channel.
+   * @param {import('./axisbind.js').AxisBinding | undefined} binding This channel's binding.
+   * @param {boolean} bound Whether this channel is bound to the offline device.
+   * @returns {HTMLElement}
+   */
+  renderOfflineCell(channel, binding, bound) {
+    const cell = document.createElement('div');
+    cell.className = 'bind-cell offline';
+    if (!bound) {
+      cell.classList.add('empty');
+      cell.textContent = '—';
+      return cell;
+    }
+    const busy = this.capture.active || this.calibrator.active;
+    cell.classList.add('bound');
+
+    const axisLabel = document.createElement('span');
+    axisLabel.className = 'cell-axis';
+    axisLabel.textContent = `Axis ${binding.axis}`;
+
+    const connected = this.input.listGamepads();
+    const move = document.createElement('select');
+    move.className = 'cell-move';
+    move.disabled = busy || connected.length === 0;
+    move.title = 'Move this binding to a connected device';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = connected.length ? 'Move to…' : 'No device connected';
+    move.appendChild(placeholder);
+    for (const d of connected) {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = `${d.index}: ${d.id}`;
+      move.appendChild(opt);
+    }
+    move.addEventListener('change', () => {
+      if (move.value) this.moveBinding(channel, move.value);
+    });
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'cell-btn';
+    clearBtn.textContent = '✕';
+    clearBtn.title = 'Clear this binding';
+    clearBtn.disabled = busy;
+    clearBtn.addEventListener('click', () => this.clearCell(channel));
+
+    const actions = document.createElement('div');
+    actions.className = 'cell-actions';
+    actions.appendChild(clearBtn);
+
+    cell.append(axisLabel, move, actions);
+    return cell;
+  }
+
   /** Rebuild the grid DOM from the connected devices and current bindings. */
   renderGrid() {
     const grid = this.bindGrid;
     grid.innerHTML = '';
     this.cellBars = new Map();
-    const devices = this.input.listGamepads();
+    const bindings = this.currentBindings();
+    const connected = this.input.listGamepads().map((d) => ({ ...d, connected: true }));
+    const connectedIds = new Set(connected.map((d) => d.id));
+    // Devices with a binding but not currently plugged in get an offline column,
+    // so the binding stays visible and can be moved onto a live device.
+    const offline = [...new Set(Object.values(bindings).filter(Boolean).map((b) => b.id))]
+      .filter((id) => !connectedIds.has(id))
+      .map((id) => ({ id, connected: false }));
+    const devices = [...connected, ...offline];
 
     if (devices.length === 0) {
       grid.style.gridTemplateColumns = '1fr';
@@ -356,13 +444,12 @@ export class ControlsUI {
     grid.appendChild(corner);
     for (const d of devices) {
       const head = document.createElement('div');
-      head.className = 'bind-devhead';
-      head.textContent = `${d.index}: ${d.id}`;
+      head.className = d.connected ? 'bind-devhead' : 'bind-devhead offline';
+      head.textContent = d.connected ? `${d.index}: ${d.id}` : `${d.id} (offline)`;
       head.title = d.id;
       grid.appendChild(head);
     }
 
-    const bindings = this.currentBindings();
     for (const channel of CHANNELS) {
       const rowLabel = document.createElement('div');
       rowLabel.className = 'bind-rowlabel';
@@ -373,16 +460,18 @@ export class ControlsUI {
   }
 
   /**
-   * One grid cell for (channel, device).
+   * One grid cell for (channel, device). Offline device columns delegate to
+   * {@link renderOfflineCell}.
    * @param {string} channel Control channel.
-   * @param {{index: number, id: string}} device Column device.
+   * @param {{index?: number, id: string, connected: boolean}} device Column device.
    * @param {import('./axisbind.js').AxisBinding | undefined} binding This channel's binding.
    * @returns {HTMLElement}
    */
   renderCell(channel, device, binding) {
+    const bound = binding && binding.id === device.id;
+    if (!device.connected) return this.renderOfflineCell(channel, binding, bound);
     const cell = document.createElement('div');
     cell.className = 'bind-cell';
-    const bound = binding && binding.id === device.id;
     const capturing = this.capturingCell?.channel === channel && this.capturingCell?.deviceId === device.id;
     const calibrating = this.calibratingCell?.channel === channel && this.calibratingCell?.deviceId === device.id;
     const busy = this.capture.active || this.calibrator.active;
