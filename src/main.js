@@ -6,7 +6,7 @@ import { loadBuildingPool } from './buildings.js';
 import { ControlsUI } from './controls-ui.js';
 import { Drone, DRONE_RADIUS } from './drone.js';
 import { GateCourse } from './gates.js';
-import { InputManager } from './input.js';
+import { InputManager, setSelect } from './input.js';
 import { StrikeMission, DRONE_HP, BOMB_MAX } from './strike.js';
 import { TouchControls } from './touch.js';
 import { World } from './world.js';
@@ -924,11 +924,6 @@ function saveSettings() {
   } catch (err) {
     console.warn('Failed to persist settings:', err);
   }
-}
-
-/** Set a select's value only if that option actually exists. */
-function setSelect(select, value) {
-  if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
 }
 
 /**

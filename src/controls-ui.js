@@ -14,7 +14,7 @@
 
 import { AxisCapture } from './axisbind.js';
 import { AxisCalibrator } from './calibration.js';
-import { expoCurve, padById } from './input.js';
+import { expoCurve, padById, setSelect } from './input.js';
 import { PRESET_LIST, CHANNELS, defaultPresetFor } from './presets.js';
 
 /** Self-contained styles for the binding grid; reuses the global --me-* palette. */
@@ -43,6 +43,8 @@ style.textContent = `
   .bind-cell.empty { color: var(--me-mid); align-items: center; text-align: center; }
   .bind-cell.bound { cursor: default; }
   .bind-cell.active { outline: 2px solid var(--me-orange); outline-offset: -2px; }
+  .bind-cell.capturing { align-items: center; text-align: center; cursor: pointer; }
+  .bind-cell .capture-cancel-hint { font-size: 0.62rem; color: var(--me-mid); }
   .bind-cell.disabled { opacity: 0.4; pointer-events: none; }
   .bind-cell .cell-axis {
     font: inherit; font-weight: 700; background: none; border: none; padding: 0;
@@ -83,12 +85,27 @@ style.textContent = `
   .ready-panel .secondary-button { width: min(320px, 100%); }
   #input-status.warn { color: var(--me-red); font-weight: 700; }
   .bind-rowlabel.warn { color: var(--me-red); }
+  #bind-preview {
+    position: absolute; top: 0.9rem; right: 0.9rem;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  #bind-preview .preview-viewport { perspective: 320px; width: 84px; height: 70px; }
+  #bind-preview .preview-gimbal {
+    width: 100%; height: 100%; display: grid; place-items: center;
+    transform-style: preserve-3d; transform: rotateX(60deg);
+  }
+  #bind-preview .preview-drone { transform-style: preserve-3d; transition: transform 0.06s linear; }
+  #bind-preview .preview-hint {
+    font-size: 0.6rem; color: var(--me-mid); text-transform: uppercase; letter-spacing: 0.04em;
+  }
 `;
 document.head.appendChild(style);
 
 /**
- * Ready-screen tutorial text per input source.
- * @type {Record<'touch' | 'gamepad' | 'keyboard', string[]>}
+ * Ready-screen tutorial text per input source. `disconnected` covers the case
+ * where saved axis bindings are active but their controller isn't plugged in —
+ * the bindings win over the keyboard, so nothing flies until it's connected.
+ * @type {Record<'touch' | 'gamepad' | 'keyboard' | 'disconnected', string[]>}
  */
 const TUTORIALS = {
   touch: [
@@ -106,15 +123,15 @@ const TUTORIALS = {
     'R reset · C camera · G god mode · O OSD.',
     'Connect a gamepad and pick a preset above for full stick control.',
   ],
+  disconnected: [
+    'Saved axis bindings are active, but their controller is not connected.',
+    'Connect it and move a stick to wake it — the bindings take over automatically.',
+    'Or pick Keyboard only above to fly without the controller.',
+  ],
 };
 
 /** Display label per channel for the grid's row headers. */
 const CHANNEL_LABELS = { throttle: 'Throttle', yaw: 'Yaw', pitch: 'Pitch', roll: 'Roll' };
-
-/** Set a select's value only if that option actually exists. */
-function setSelect(select, value) {
-  if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
-}
 
 /** A dim vertical separator between items in a cell header row. */
 function sep() {
@@ -157,6 +174,7 @@ export class ControlsUI {
     this.expoCanvas = document.getElementById('expo-curve');
     this.bindingOverlay = document.getElementById('binding-overlay');
     this.bindGrid = document.getElementById('bind-grid');
+    this.previewDrone = this.bindingOverlay.querySelector('.preview-drone');
     this.bindStatus = document.getElementById('bind-status');
     this.bindDone = document.getElementById('bind-done');
     this.bindClear = document.getElementById('bind-clear');
@@ -188,7 +206,9 @@ export class ControlsUI {
     this.yawExpoSlider.addEventListener('input', () => this.syncRates());
     this.ratesOverlay.addEventListener('change', () => this.onSettingsChange());
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape' && !this.ratesOverlay.hidden) this.ratesOverlay.hidden = true;
+      if (e.code !== 'Escape') return;
+      if (!this.ratesOverlay.hidden) this.ratesOverlay.hidden = true;
+      else if (this.capture.active) this.cancelCapture();
     });
 
     this.advancedBind.addEventListener('click', () => this.openGrid());
@@ -223,6 +243,7 @@ export class ControlsUI {
     this.capture.update(dt);
     this.calibrator.update(dt);
     this.updateBars();
+    this.updatePreview();
   }
 
   /** True while the binding grid is open (arming must wait). */
@@ -302,7 +323,13 @@ export class ControlsUI {
 
     const label = (id) => PRESET_LIST.find((p) => p.id === id)?.label ?? id;
     const missing = this.missingChannels();
-    if (missing.length) {
+    if (this.awaitingDevice()) {
+      // Saved bindings win over the keyboard, so with no controller nothing
+      // flies — flag it rather than showing a reassuring preset line.
+      this.inputStatus.textContent =
+        '⚠ Controller not detected — connect it, or pick Keyboard only to fly.';
+      this.inputStatus.classList.add('warn');
+    } else if (missing.length) {
       this.inputStatus.textContent =
         `⚠ ${missing.map((c) => CHANNEL_LABELS[c]).join(', ')} unbound — won't respond. Pick a preset or bind them.`;
       this.inputStatus.classList.add('warn');
@@ -329,11 +356,26 @@ export class ControlsUI {
     return this.isTouch ? 'touch' : 'keyboard';
   }
 
+  /**
+   * True when saved bindings are active but no controller is connected: the
+   * bindings win over the keyboard in the poll, so the drone won't respond
+   * until a device is connected or Keyboard is selected. An empty saved set
+   * (everything cleared) has nothing to await — that's reported as unbound
+   * channels instead.
+   * @returns {boolean}
+   */
+  awaitingDevice() {
+    if (this.input.forceKeyboard) return false;
+    const b = this.input.bindings;
+    if (!b || !Object.values(b).some(Boolean)) return false;
+    return !this.input.firstPad();
+  }
+
   /** Rebuild the ready-screen tutorial list and the Advanced button visibility. */
   updateTutorial() {
-    const source = this.effectiveSource();
+    const key = this.awaitingDevice() ? 'disconnected' : this.effectiveSource();
     this.readyTutorial.innerHTML = '';
-    for (const text of TUTORIALS[source]) {
+    for (const text of TUTORIALS[key]) {
       const li = document.createElement('li');
       li.textContent = text;
       this.readyTutorial.appendChild(li);
@@ -573,8 +615,14 @@ export class ControlsUI {
     const busy = this.busy;
 
     if (capturing) {
-      cell.className = 'bind-cell active';
-      cell.textContent = 'Move the axis and hold…';
+      cell.className = 'bind-cell active capturing';
+      const main = document.createElement('div');
+      main.textContent = 'Move the axis and hold…';
+      const hint = document.createElement('div');
+      hint.className = 'capture-cancel-hint';
+      hint.textContent = 'click or Esc to cancel';
+      cell.append(main, hint);
+      cell.addEventListener('click', () => this.cancelCapture());
       return cell;
     }
     if (!bound) {
@@ -691,6 +739,15 @@ export class ControlsUI {
     this.renderGrid();
   }
 
+  /** Abort an in-progress capture, reverting the cell to its prior state. */
+  cancelCapture() {
+    if (!this.capture.active) return;
+    this.capture.cancel();
+    this.capturingCell = null;
+    // renderGrid resets bind-status now that nothing is capturing.
+    this.renderGrid();
+  }
+
   /**
    * Flip a channel's direction.
    * @param {string} channel Control channel.
@@ -773,6 +830,29 @@ export class ControlsUI {
         if (calVal) calVal.textContent = after.toFixed(2);
       }
     }
+  }
+
+  /**
+   * Rotate the little preview drone to the live pitch / yaw / roll, so the user
+   * can see which way a bound axis banks / pitches / turns the aircraft (and
+   * whether it needs Rev) instead of reading numbers. Throttle isn't attitude.
+   */
+  updatePreview() {
+    if (!this.previewDrone) return;
+    const b = this.currentBindings();
+    const pads = navigator.getGamepads();
+    const val = (ch) => {
+      const bind = b[ch];
+      if (!bind) return 0;
+      const pad = padById(bind.id, pads);
+      if (!pad || pad.axes[bind.axis] === undefined) return 0;
+      return this.input.channelValue(ch, bind, pad.axes[bind.axis]);
+    };
+    const pitch = val('pitch');
+    const roll = val('roll');
+    const yaw = val('yaw');
+    this.previewDrone.style.transform =
+      `rotateZ(${yaw * 55}deg) rotateX(${pitch * 45}deg) rotateY(${roll * 45}deg)`;
   }
 
   /* ── Rates & Expo ────────────────────────────────────────────────── */

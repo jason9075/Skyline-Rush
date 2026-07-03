@@ -165,6 +165,24 @@
 
   <div id="binding-overlay" hidden>
     <div class="ready-panel bind-panel">
+      <div id="bind-preview" aria-hidden="true">
+        <div class="preview-viewport">
+          <div class="preview-gimbal">
+            <div class="preview-drone">
+              <svg viewBox="0 0 80 80" width="66" height="66">
+                <line x1="22" y1="22" x2="58" y2="58" stroke="#5A6468" stroke-width="4" stroke-linecap="round" />
+                <line x1="58" y1="22" x2="22" y2="58" stroke="#5A6468" stroke-width="4" stroke-linecap="round" />
+                <circle cx="22" cy="22" r="11" fill="#E0301E" />
+                <circle cx="58" cy="22" r="11" fill="#E0301E" />
+                <circle cx="22" cy="58" r="11" fill="#5A6468" />
+                <circle cx="58" cy="58" r="11" fill="#5A6468" />
+                <circle cx="40" cy="40" r="9" fill="#1B1E20" />
+              </svg>
+            </div>
+          </div>
+        </div>
+        <span class="preview-hint">nose = red</span>
+      </div>
       <h1>Axis Binding</h1>
       <p class="rates-hint">Columns are devices, rows are controls. Click a cell to bind that control to an axis on that device — move the axis and hold. Toggle <b>Rev</b> to reverse direction, <b>Cal</b> to calibrate its range.</p>
       <div id="bind-grid" aria-label="Axis binding matrix"></div>

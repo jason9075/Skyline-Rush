@@ -77,6 +77,16 @@ export function padById(id, pads = navigator.getGamepads()) {
   return Array.from(pads).find((p) => p && p.id === id) || null;
 }
 
+/**
+ * Set a `<select>`'s value only when that option exists, leaving it unchanged
+ * otherwise. Shared by the ready-screen and settings-restore paths.
+ * @param {HTMLSelectElement} select Target select.
+ * @param {string} value Desired value.
+ */
+export function setSelect(select, value) {
+  if (Array.from(select.options).some((o) => o.value === value)) select.value = value;
+}
+
 /** Polls gamepads and keyboard, exposing one normalized ControlInput per frame. */
 export class InputManager {
   /**
@@ -96,11 +106,6 @@ export class InputManager {
      * @type {{id: string, bindings: Record<string, import('./axisbind.js').AxisBinding>} | null}
      */
     this.autoCache = null;
-    /**
-     * User-chosen gamepad index; null selects the first connected pad (auto).
-     * @type {number | null}
-     */
-    this.selectedIndex = null;
     /** When true, ignore any gamepad and use the keyboard. */
     this.forceKeyboard = false;
     /** Last status string emitted, to debounce {@link onStatusChange}. */
@@ -121,9 +126,7 @@ export class InputManager {
     window.addEventListener('gamepadconnected', () => {
       if (this.onDevicesChange) this.onDevicesChange();
     });
-    window.addEventListener('gamepaddisconnected', (e) => {
-      // Drop an explicit selection that just vanished so we fall back to auto.
-      if (e.gamepad.index === this.selectedIndex) this.selectedIndex = null;
+    window.addEventListener('gamepaddisconnected', () => {
       if (this.onDevicesChange) this.onDevicesChange();
     });
     window.addEventListener('keydown', (e) => this.keys.add(e.code));
@@ -131,11 +134,10 @@ export class InputManager {
   }
 
   /**
-   * Resolve the active gamepad for this frame. The user's explicit selection
-   * ({@link selectedIndex}) wins while it stays connected; otherwise the first
-   * connected pad is used. `getGamepads()` must be re-polled every frame — its
-   * state objects are snapshots — and it also surfaces pads plugged in before
-   * the page, which some browsers never announce via 'gamepadconnected'.
+   * Resolve the active gamepad for this frame, updating the status line as a
+   * side effect. `getGamepads()` must be re-polled every frame — its state
+   * objects are snapshots — and it also surfaces pads plugged in before the
+   * page, which some browsers never announce via 'gamepadconnected'.
    * @returns {Gamepad | null}
    */
   activeGamepad() {
@@ -149,13 +151,11 @@ export class InputManager {
   }
 
   /**
-   * The device the auto/selected path resolves to, without side effects: the
-   * explicit selection while it stays connected, else the first connected pad.
+   * The first connected pad the auto path flies, without side effects.
    * @returns {Gamepad | null}
    */
   firstPad() {
-    const pads = navigator.getGamepads();
-    return (this.selectedIndex !== null && pads[this.selectedIndex]) || Array.from(pads).find((p) => p) || null;
+    return Array.from(navigator.getGamepads()).find((p) => p) || null;
   }
 
   /**
@@ -180,12 +180,11 @@ export class InputManager {
 
   /**
    * Choose the active input source.
-   * @param {'auto' | 'keyboard' | number} sel `'auto'` = first connected pad,
-   *   `'keyboard'` = force keyboard, or a specific gamepad index.
+   * @param {'auto' | 'keyboard'} sel `'auto'` = first connected pad,
+   *   `'keyboard'` = force keyboard.
    */
   selectInput(sel) {
     this.forceKeyboard = sel === 'keyboard';
-    this.selectedIndex = typeof sel === 'number' ? sel : null;
   }
 
   /**
@@ -210,8 +209,9 @@ export class InputManager {
     if (!this.forceKeyboard) {
       // A saved set (even a partial one, if some cells were cleared) wins;
       // otherwise a connected pad flies via its auto preset.
-      const bindings = this.bindings ?? this.autoBindings();
-      if (bindings) return this.pollBindings(bindings);
+      const saved = this.bindings;
+      const bindings = saved ?? this.autoBindings();
+      if (bindings) return this.pollBindings(bindings, Boolean(saved));
     }
     if (this.touch) {
       // Once mounted (touch devices only), touch is the source even between
@@ -314,10 +314,13 @@ export class InputManager {
    * is assumed self-normalized to [-1, 1]. Centered channels are deadband-shaped;
    * throttle maps full travel to [0, 1].
    * @param {Record<string, import('./axisbind.js').AxisBinding>} bindings Active set.
+   * @param {boolean} custom Whether this is the user's saved set (vs an auto preset).
    * @returns {ControlInput}
    */
-  pollBindings(bindings) {
-    this.setStatus('Input: custom axis bindings');
+  pollBindings(bindings, custom) {
+    // The auto path flies a best-guess preset on an untouched device; only the
+    // user's own saved bindings should read as "custom" in the status line.
+    this.setStatus(custom ? 'Input: custom axis bindings' : `Gamepad: ${this.firstPad()?.id ?? 'none'}`);
     const pads = navigator.getGamepads();
     /**
      * Raw value of a binding's axis, or null when its device/axis is gone.
