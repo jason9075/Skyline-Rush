@@ -14,7 +14,7 @@
 
 import { AxisCapture } from './axisbind.js';
 import { AxisCalibrator } from './calibration.js';
-import { expoCurve } from './input.js';
+import { expoCurve, normalizeCentered } from './input.js';
 import { PRESET_LIST, CHANNELS, defaultPresetFor } from './presets.js';
 
 /** Self-contained styles for the binding grid; reuses the global --me-* palette. */
@@ -53,14 +53,23 @@ style.textContent = `
     display: flex; gap: 5px; align-items: center; justify-content: center;
     font-size: 0.72rem; flex-wrap: nowrap; white-space: nowrap;
   }
-  .bind-cell label.cell-rev { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+  .bind-cell label.cell-rev { display: flex; align-items: center; gap: 3px; cursor: pointer; height: 20px; }
   .bind-cell button.cell-btn {
     font: inherit; font-size: 0.72rem; border: 1px solid var(--me-gray);
-    background: #fff; color: var(--me-dark); border-radius: 2px; cursor: pointer; padding: 1px 6px;
+    background: #fff; color: var(--me-dark); border-radius: 2px; cursor: pointer;
+    padding: 0 6px; height: 20px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
   }
   .bind-cell button.cell-btn:hover { background: var(--me-red); border-color: var(--me-red); color: #fff; }
   .bind-cell .cell-bar { height: 4px; background: var(--me-light); border-radius: 2px; overflow: hidden; }
   .bind-cell .cell-fill { height: 100%; width: 50%; background: var(--me-blue); }
+  .bind-cell .cell-fill-cal { background: var(--me-orange); }
+  .bind-cell .cell-cal { display: flex; align-items: center; gap: 5px; }
+  .bind-cell .cell-cal .cell-bar { flex: 1; }
+  .bind-cell .cell-calval {
+    font-size: 0.66rem; color: var(--me-mid); min-width: 2.7em; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
   .bind-empty-msg { grid-column: 1 / -1; padding: 1rem; text-align: center; color: var(--me-mid); }
 `;
 document.head.appendChild(style);
@@ -398,7 +407,7 @@ export class ControlsUI {
     const axisLabel = document.createElement('button');
     axisLabel.type = 'button';
     axisLabel.className = 'cell-axis';
-    axisLabel.textContent = `Axis ${binding.axis}${binding.range ? ' ✓' : ''}`;
+    axisLabel.textContent = `Axis ${binding.axis}`;
     axisLabel.title = 'Click to rebind this control';
     axisLabel.disabled = busy;
     axisLabel.addEventListener('click', () => this.beginCapture(channel, device.id));
@@ -418,10 +427,13 @@ export class ControlsUI {
     const calBtn = document.createElement('button');
     calBtn.type = 'button';
     calBtn.className = 'cell-btn';
-    calBtn.textContent = calibrating ? 'Finish' : 'Cal';
-    calBtn.addEventListener('click', () =>
-      calibrating ? this.finishCalibration() : this.beginCalibration(channel, device.id, binding)
-    );
+    calBtn.textContent = calibrating ? 'Finish' : binding.range ? 'Cal ✓' : 'Cal';
+    calBtn.title = binding.range ? 'Click to remove calibration' : 'Calibrate axis range';
+    calBtn.addEventListener('click', () => {
+      if (calibrating) this.finishCalibration();
+      else if (binding.range) this.removeRange(channel);
+      else this.beginCalibration(channel, device.id, binding);
+    });
 
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
@@ -438,9 +450,30 @@ export class ControlsUI {
     const fill = document.createElement('div');
     fill.className = 'cell-fill';
     bar.appendChild(fill);
-    this.cellBars.set(channel, { fill, id: binding.id, axis: binding.axis });
-
     cell.append(axisLabel, actions, bar);
+
+    // Calibrated channels get a second bar + numeric readout for the post-cal
+    // value (raw normalized through the range), so the effect is visible.
+    let calFill = null;
+    let calVal = null;
+    if (binding.range) {
+      const calRow = document.createElement('div');
+      calRow.className = 'cell-cal';
+      const calBar = document.createElement('div');
+      calBar.className = 'cell-bar';
+      calFill = document.createElement('div');
+      calFill.className = 'cell-fill cell-fill-cal';
+      calBar.appendChild(calFill);
+      calVal = document.createElement('span');
+      calVal.className = 'cell-calval';
+      calVal.textContent = '0.00';
+      calRow.append(calBar, calVal);
+      cell.appendChild(calRow);
+    }
+    this.cellBars.set(channel, {
+      fill, calFill, calVal, id: binding.id, axis: binding.axis, range: binding.range ?? null,
+    });
+
     return cell;
   }
 
@@ -526,14 +559,31 @@ export class ControlsUI {
     this.calibrator.finish();
   }
 
+  /**
+   * Remove a channel's range calibration, keeping the axis binding itself.
+   * @param {string} channel Control channel.
+   */
+  removeRange(channel) {
+    const b = { ...this.currentBindings()[channel] };
+    if (!b.range) return;
+    delete b.range;
+    this.setBinding(channel, b);
+    this.renderGrid();
+  }
+
   /** Update the live fill bars for every bound cell from current axis values. */
   updateBars() {
     if (this.cellBars.size === 0) return;
     const pads = navigator.getGamepads();
-    for (const { fill, id, axis } of this.cellBars.values()) {
+    for (const { fill, calFill, calVal, id, axis, range } of this.cellBars.values()) {
       const pad = Array.from(pads).find((p) => p && p.id === id);
       const v = pad && pad.axes[axis] !== undefined ? pad.axes[axis] : 0;
       fill.style.width = `${((Math.max(-1, Math.min(1, v)) + 1) / 2) * 100}%`;
+      if (calFill && range) {
+        const n = normalizeCentered(range, v);
+        calFill.style.width = `${((Math.max(-1, Math.min(1, n)) + 1) / 2) * 100}%`;
+        if (calVal) calVal.textContent = n.toFixed(2);
+      }
     }
   }
 
